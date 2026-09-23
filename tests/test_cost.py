@@ -11,6 +11,7 @@ PRICES = {
         "cache_read_input_token_cost": 1e-6,
     },
     "anthropic/claude-sonnet-5": {"input_cost_per_token": 3e-6, "output_cost_per_token": 1.5e-5},
+    "openai/gpt-5": {"input_cost_per_token": 2e-6, "output_cost_per_token": 8e-6},
 }
 
 
@@ -21,6 +22,7 @@ PRICES = {
         ("claude-sonnet-5", True),
         ("claude-opus-5-20260101", True),
         ("gpt-9", False),
+        ("gpt-5", True),
     ],
 )
 def test_price_lookup(model: str, found: bool):
@@ -52,3 +54,13 @@ def test_one_hour_rate_falls_back_to_double_input():
 
 def test_unpriced_model():
     assert cost(Usage(model="gpt-9", input_tokens=5), PRICES) is None
+
+
+def test_codex_cache_write_needs_an_explicit_rate():
+    usage = Usage(
+        model="gpt-5",
+        input_tokens=10,
+        cache_write_tokens=20,
+        cache_write_requires_explicit_price=True,
+    )
+    assert cost(usage, PRICES) == pytest.approx(30 * 2e-6)

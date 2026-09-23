@@ -1,46 +1,73 @@
 # agent-insights
 
-Reads local coding-agent chat logs and writes one HTML report: activity, cost and tokens per
-repo and model, tool usage, a performance score per session and project, and your messages
-tagged by what happened (rejected, interrupted, frustrated, committed, low_performance, …).
+`agent-insights` is a personal dashboard for understanding how you work with coding agents—not just how many tokens they use, but where they help, where they get stuck, and which sessions actually end in something useful.
 
-Supported agents: Claude Code (`~/.claude/projects`).
+It reads the chat logs already stored on your machine and turns them into one self-contained HTML report. You can explore activity and cost by project or model, see which tools were used, compare session performance, and review moments where you corrected, interrupted, approved, or got frustrated with the agent.
 
-## Usage
+Nothing is uploaded. Your prompts, code, and project names stay on your computer.
 
-    uv sync --extra nli
-    uv run agent-insights scan            # writes ./report.html
-    uv run agent-insights scan --no-nli   # rules only, no model download
+## Supported agents
 
-## Tags
+- Claude Code from `~/.claude/projects`
+- Codex from `$CODEX_HOME/sessions`, or `~/.codex/sessions` by default
 
-From the log itself (`tagging/rules.py`):
+Codex subagent work is folded into its parent session, and replayed history is filtered out so it does not inflate token or tool counts.
 
-- `rejected`: a tool call you denied (the reason you typed is kept as a message)
+## Getting started
+
+You need Python 3.12 or newer and [`uv`](https://docs.astral.sh/uv/).
+
+```sh
+uv sync --extra nli
+uv run agent-insights scan
+```
+
+The report is written to `./report.html`. Open it in any browser.
+
+The first full scan downloads two local language models and may take a little while. Their results are cached, so later scans only classify new messages. If you want a quick report without the model download, use the rule-based scan:
+
+```sh
+uv run agent-insights scan --no-nli
+```
+
+To write the report somewhere else:
+
+```sh
+uv run agent-insights scan --out path/to/report.html
+```
+
+## What the report shows
+
+- Sessions, prompts, active time, token usage, and estimated API cost
+- Breakdowns by project, model, day, hour, and tool
+- Successful commits and edited-file counts
+- Failed or rejected tool calls
+- A performance score for each session and project
+- Your messages, searchable and grouped by interaction tags
+
+The generated report includes excerpts from your prompts. It stays local, but you should still treat the HTML file as personal data if you share or archive it.
+
+## How messages are tagged
+
+Some tags come directly from things that happened in the session:
+
+- `rejected`: you denied a tool call
 - `interrupted`: you stopped a running request
-- `committed`: your message that led to a `git commit` that succeeded
-- `low_performance`: the agent hit 3+ failed tool calls, or edited one file 3+ times, before your next message
+- `committed`: the turn produced a successful Git commit
+- `low_performance`: the agent had at least three failed tool calls or edited the same file at least three times before your next message
 - `testing`: the turn ran a test command
-- `debugging`: a tool call failed and a file was edited after it in the same turn
+- `debugging`: the agent edited a file after a tool call failed
 
-From your wording, with local models only, never keywords:
+Other tags look at the wording of your message: `frustrated`, `correction`, `style`, `approval`, `question`, and `new_task`. Classification runs locally with `MoritzLaurer/deberta-v3-large-zeroshot-v2.0` and `SamLowe/roberta-base-go_emotions`; it does not send your messages to an API. Scores are cached under `~/.cache/agent-insights/`.
 
-- `tagging/nli.py`, `MoritzLaurer/deberta-v3-large-zeroshot-v2.0`: `frustrated`, `correction`,
-  `style`, `approval`, `question`, `new_task`
-- `tagging/emotion.py`, `SamLowe/roberta-base-go_emotions`: `frustrated` when annoyance, anger,
-  disapproval or disappointment reaches 0.3
+## About the score
 
-Model scores are cached in `~/.cache/agent-insights/`, so reruns only classify new messages.
+The score is meant as a useful signal, not a verdict on you or the agent. It starts from the amount of friction in each turn: corrections, rejected calls, interruptions, repeated failures, and other tags carry different weights. Successful commits help the score, while unusually expensive API calls make a small adjustment in either direction.
 
-## Score
+The exact calculation lives in `src/agent_insights/stats.py`. Session scores are capped at 100, and project scores are weighted by the number of turns in each session.
 
-Each turn (one of your messages plus everything the agent did until the next one) gets a
-penalty: the sum of `TAG_WEIGHTS` in `stats.py` over its tags, plus 0.1 per failed tool
-call. A session scores `100 × e^(−3 × penalty per turn)`, ×1.1 when it made at least one
-commit, ×0.9–1.1 for cost per API call against the median session, capped at 100. A project
-score is its sessions' scores weighted by turns.
+## Cost estimates
 
-## Cost
+Prices come from LiteLLM's public model-price table and are cached for 24 hours. The parser handles the different cache-token formats used by Claude Code and Codex, and avoids counting repeated or cumulative usage records twice.
 
-LiteLLM's price table, cached for 24h, with 1-hour cache writes at their own rate. Tokens are
-counted once per API message, including when a continued session repeats earlier records.
+These figures use published API prices. They are useful for comparison, but they may not match what you pay through a subscription plan.

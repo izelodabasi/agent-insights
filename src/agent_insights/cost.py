@@ -36,7 +36,14 @@ def load_prices(cache: Path = CACHE) -> Prices:
 
 def price_for(model: str, prices: Prices) -> dict | None:
     base = re.sub(r"-\d{8}$", "", model)
-    for key in (model, f"anthropic/{model}", base, f"anthropic/{base}"):
+    for key in (
+        model,
+        f"anthropic/{model}",
+        f"openai/{model}",
+        base,
+        f"anthropic/{base}",
+        f"openai/{base}",
+    ):
         if (entry := prices.get(key)) and "input_cost_per_token" in entry:
             return entry
 
@@ -50,10 +57,13 @@ def cost(usage: Usage, prices: Prices) -> float | None:
 
     inp = p.get("input_cost_per_token", 0)
     write_5m = usage.cache_write_tokens - usage.cache_write_1h_tokens
+    write_rate = p.get("cache_creation_input_token_cost")
+    if write_rate is None:
+        write_rate = inp if usage.cache_write_requires_explicit_price else inp * 1.25
     return (
         usage.input_tokens * inp
         + usage.output_tokens * p.get("output_cost_per_token", 0)
-        + write_5m * p.get("cache_creation_input_token_cost", inp * 1.25)
+        + write_5m * write_rate
         + usage.cache_write_1h_tokens * p.get("cache_creation_input_token_cost_above_1hr", inp * 2)
         + usage.cache_read_tokens * p.get("cache_read_input_token_cost", inp)
     )

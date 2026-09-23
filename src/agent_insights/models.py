@@ -35,6 +35,7 @@ class Usage(BaseModel):
     cache_write_tokens: int = 0
     cache_write_1h_tokens: int = Field(0, description="subset of cache_write_tokens on the 1h TTL")
     cache_read_tokens: int = 0
+    cache_write_requires_explicit_price: bool = False
 
 
 class Session(BaseModel):

@@ -1,7 +1,7 @@
 from agent_insights.models import Session
-from agent_insights.sources import claude_code
+from agent_insights.sources import claude_code, codex
 
-SOURCES = {"claude-code": claude_code}
+SOURCES = {"claude-code": claude_code, "codex": codex}
 
 
 def discover() -> list[str]:
