@@ -126,6 +126,9 @@ input[type=search] { flex: 1; min-width: 180px; }
 .agent-mark { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
   background: var(--agent-color); color: white; font: 600 10px/1 var(--sans); }
 .agent-count { color: var(--muted); font: 500 11px var(--mono); }
+.thinking { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.effort { display: inline-flex; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft);
+  color: var(--text-2); font-size: 11px; text-transform: capitalize; }
 .score { display: inline-flex; align-items: center; gap: 6px; }
 .spark { display: block; overflow: visible; }
 .spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; }
@@ -166,6 +169,10 @@ input[type=search] { flex: 1; min-width: 180px; }
 <main class="wrap">
   <section class="tab" id="tab-overview">
     <div class="card kpis" id="tiles"></div>
+    <div class="card" id="thinking-overview">
+      <h2>Thinking effort <span class="count">sessions using each level</span></h2>
+      <div class="body legend" id="thinking-overview-list"></div>
+    </div>
     <div class="grid2">
       <div class="card"><h2>Prompts per day</h2><div class="body chart" id="daily"></div></div>
       <div class="card"><h2>Cost per day</h2><div class="body chart" id="daily-cost"></div></div>
@@ -267,8 +274,14 @@ function renderAll() {
     [num(T.sessions), "sessions"], [num(T.projects), "projects"], [num(T.prompts), "prompts"],
     [num(T.active_hours), "active hours"], [usd(T.cost), "cost at API prices"],
     [tok(T.tokens_in), "tokens in"], [tok(T.tokens_out), "tokens out"],
+    [tok(T.tokens_reasoning), "thinking tokens"],
     [tok(T.tokens_cached), "cache read"], [tok(T.tokens_written), "cache written"],
   ].map(([v, l]) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`).join("");
+  const efforts = Object.entries(T.reasoning_efforts || {});
+  $("thinking-overview").hidden = efforts.length === 0;
+  $("thinking-overview-list").innerHTML = efforts.map(([level, count]) =>
+    `<span><i class="dot" style="--c:var(--c-violet)"></i><span style="text-transform:capitalize">${esc(level)}</span><b>${num(count)}</b></span>`
+  ).join("");
   renderCharts();
   renderTables();
   renderFilters();
@@ -331,6 +344,11 @@ function sparkline(values) {
 }
 const scoreCell = v => v === null ? `<span class="none">–</span>`
   : `<span class="score"><i class="dot" style="--c: var(${v >= 80 ? "--c-green" : v >= 50 ? "--c-orange" : "--c-red"})"></i>${v}</span>`;
+const thinkingCell = (tokens, row) => {
+  const levels = (row.reasoning_efforts || []).map(level => `<span class="effort">${esc(level)}</span>`).join("");
+  const amount = tokens ? `<span class="mono">${tok(tokens)} tokens</span>` : "";
+  return levels || amount ? `<div class="thinking">${levels}${amount}</div>` : `<span class="none">–</span>`;
+};
 
 const cellText = v => Array.isArray(v) ? v.join(" ") : v && typeof v === "object" ? Object.keys(v).join(" ") : String(v ?? "");
 function table(el, cols, rows, onCount) {
@@ -382,6 +400,7 @@ function renderTables() {
     {k: "model", h: "Model", f: v => `<span class="mono">${esc(v)}</span>`},
     {k: "agents", h: "Agents", f: agentBadges},
     {k: "input", h: "Input", n: 1, f: num}, {k: "output", h: "Output", n: 1, f: num},
+    {k: "reasoning", h: "Thinking", n: 1, f: num},
     {k: "cache_read", h: "Cache read", n: 1, f: num}, {k: "cache_write", h: "Cache write", n: 1, f: num},
     {k: "cost", h: "Cost", n: 1, f: (v, r) => r.priced ? usd(v) : "unpriced"},
   ], V.models);
@@ -402,6 +421,7 @@ function renderSessions() {
     {k: "agent", h: "Agent", f: agentBadge}, {k: "project", h: "Project"}, {k: "prompts", h: "Prompts", n: 1, f: num},
     {k: "active_min", h: "Active minutes", n: 1, f: num}, {k: "cost", h: "Cost", n: 1, f: usd},
     {k: "score", h: "Score", n: 1, f: scoreCell},
+    {k: "reasoning_tokens", h: "Thinking", f: thinkingCell},
     {k: "trend", h: "Score trend", f: sparkline},
     {k: "cost_per_call", h: "Cost per call", n: 1, f: v => "$" + v.toFixed(3)},
     {k: "files_edited", h: "Files edited", n: 1, f: num},
@@ -434,7 +454,8 @@ function renderMessages() {
   $("msg-count").textContent = num(rows.length);
   $("messages").innerHTML = rows.slice(0, limit).map(m => {
     const agent = agentInfo(m.agent);
-    return `<div class="msg" style="--agent-color:${agent.color}"><div class="meta">${agentBadge(m.agent)}<span>${esc(when(m.ts))}</span><span>${esc(m.project)}</span>${m.kind === "rejection" ? "<span>rejection reason</span>" : ""}<span>${tok(m.tokens_out)} tokens out · ${usd(m.cost)}</span>${tagList(m.tags)}</div><pre>${esc(m.text)}</pre></div>`;
+    const thinking = m.reasoning_tokens ? `<span>${tok(m.reasoning_tokens)} thinking tokens</span>` : "";
+    return `<div class="msg" style="--agent-color:${agent.color}"><div class="meta">${agentBadge(m.agent)}<span>${esc(when(m.ts))}</span><span>${esc(m.project)}</span>${m.kind === "rejection" ? "<span>rejection reason</span>" : ""}<span>${tok(m.tokens_out)} tokens out · ${usd(m.cost)}</span>${thinking}${tagList(m.tags)}</div><pre>${esc(m.text)}</pre></div>`;
   }).join("") || `<p class="empty">No messages match.</p>`;
   $("more").hidden = rows.length <= limit;
   $("more").textContent = `Show more · ${num(rows.length - limit)} left`;

@@ -79,7 +79,10 @@ def test_all_agent_rows_keep_their_source_attribution():
     codex.agent = "codex"
     codex.session_id = "codex-session"
     codex.project = "shared"
-    codex.usage["c"] = Usage(model="shared-model", timestamp=TS, output_tokens=10)
+    codex.usage["c"] = Usage(
+        model="shared-model", timestamp=TS, output_tokens=10, reasoning_tokens=4
+    )
+    codex.reasoning_efforts.add("high")
     codex.events.append(Event(kind=Kind.TOOL_USE, timestamp=TS, tool="Read", tool_id="c"))
 
     copilot = _session(set())
@@ -92,5 +95,11 @@ def test_all_agent_rows_keep_their_source_attribution():
     result = summarize([codex, copilot], {})
     assert result["projects"][0]["agents"] == {"codex": 1, "copilot": 1}
     assert result["models"][0]["agents"] == {"codex": 1, "copilot": 1}
+    assert result["models"][0]["reasoning"] == 4
     assert result["tools"][0]["agents"] == {"codex": 1, "copilot": 1}
     assert {message["agent"] for message in result["messages"]} == {"codex", "copilot"}
+    assert result["totals"]["tokens_reasoning"] == 4
+    assert result["totals"]["reasoning_efforts"] == {"high": 1}
+    codex_row = next(row for row in result["sessions"] if row["agent"] == "codex")
+    assert codex_row["reasoning_efforts"] == ["high"]
+    assert {message["reasoning_tokens"] for message in result["messages"]} == {0, 4}

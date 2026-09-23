@@ -69,6 +69,6 @@ The exact calculation lives in `src/agent_insights/stats.py`. Session scores are
 
 ## Cost estimates
 
-Prices come from LiteLLM's public model-price table and are cached for 24 hours. The parser handles the different token formats used by Claude Code, Codex, and Copilot, and avoids counting repeated or cumulative usage records twice.
+Prices come from LiteLLM's public model-price table and are cached for 24 hours. The parser handles the different token formats used by Claude Code, Codex, and Copilot, and avoids counting repeated or cumulative usage records twice. Thinking effort and reasoning tokens are shown when the agent recorded exact values; they are never estimated.
 
 These figures use published API prices. They are useful for comparison, but they may not match what you pay through a subscription plan.

@@ -32,6 +32,7 @@ class Usage(BaseModel):
     timestamp: datetime | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    reasoning_tokens: int = 0
     cache_write_tokens: int = 0
     cache_write_1h_tokens: int = Field(0, description="subset of cache_write_tokens on the 1h TTL")
     cache_read_tokens: int = 0
@@ -46,6 +47,7 @@ class Session(BaseModel):
     title: str = ""
     ai_title: str = ""
     branches: set[str] = Field(default_factory=set)
+    reasoning_efforts: set[str] = Field(default_factory=set)
     events: list[Event] = Field(default_factory=list)
     usage: dict[str, Usage] = Field(default_factory=dict)
 

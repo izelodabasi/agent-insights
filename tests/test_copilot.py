@@ -32,13 +32,14 @@ def test_loads_vscode_chat_session_journal(tmp_path: Path):
                 "resolvedModel": "claude-sonnet-4-6",
                 "toolCallRounds": [
                     {
+                        "thinking": {"tokens": 17},
                         "toolCalls": [
                             {
                                 "id": "call-1",
                                 "name": "run_in_terminal",
                                 "arguments": json.dumps({"command": "uv run pytest"}),
                             }
-                        ]
+                        ],
                     }
                 ],
             }
@@ -53,6 +54,7 @@ def test_loads_vscode_chat_session_journal(tmp_path: Path):
                     "version": 3,
                     "creationDate": 1_780_157_113_000,
                     "sessionId": "session-1",
+                    "customTitle": "Test the parser",
                     "requests": [],
                 },
             },
@@ -67,6 +69,7 @@ def test_loads_vscode_chat_session_journal(tmp_path: Path):
         "session-1",
         "my-app",
     )
+    assert session.title == "Test the parser"
     assert [event.text for event in session.of(Kind.PROMPT)] == ["run the tests"]
     assert [event.text for event in session.of(Kind.ASSISTANT)] == ["Everything passes."]
     [tool] = session.of(Kind.TOOL_USE)
@@ -77,6 +80,7 @@ def test_loads_vscode_chat_session_journal(tmp_path: Path):
         32543,
         88,
     )
+    assert usage.reasoning_tokens == 17
 
 
 def test_loads_empty_window_chat(tmp_path: Path):
@@ -95,6 +99,7 @@ def test_loads_empty_window_chat(tmp_path: Path):
                             "timestamp": 1_780_157_113_020,
                             "modelId": "copilot/gpt-4.1",
                             "message": {"text": "hello"},
+                            "response": [{"generatedTitle": "Quick question"}],
                             "completionTokens": 12,
                         }
                     ],
@@ -105,6 +110,7 @@ def test_loads_empty_window_chat(tmp_path: Path):
 
     [session] = copilot.load_sessions(tmp_path / "copilot", [], [global_storage])
     assert session.project == "copilot-chat"
+    assert session.title == "Quick question"
     assert session.usage["r1"].model == "gpt-4.1"
 
 
@@ -152,6 +158,7 @@ def test_loads_cli_events_and_shutdown_usage(tmp_path: Path):
                                 "outputTokens": 20,
                                 "cacheReadTokens": 60,
                                 "cacheWriteTokens": 10,
+                                "reasoningTokens": 5,
                             }
                         }
                     }
@@ -168,6 +175,7 @@ def test_loads_cli_events_and_shutdown_usage(tmp_path: Path):
         (usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_write_tokens)
         for usage in session.usage.values()
     ] == [(0, 20, 0, 0), (30, 0, 60, 10)]
+    assert [usage.reasoning_tokens for usage in session.usage.values()] == [0, 5]
 
 
 def test_installed_detects_vscode_workspace(monkeypatch, tmp_path: Path):

@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -48,11 +49,14 @@ def load_sessions(root: Path | None = None) -> list[Session]:
                 {f"{child.session_id}:{key}": value for key, value in child.usage.items()}
             )
             parent.branches |= child.branches
+            parent.reasoning_efforts |= child.reasoning_efforts
         else:
             orphans.append(child)
 
     sessions = [*by_id.values(), *orphans]
+    titles = _titles(root)
     for session in sessions:
+        session.title = titles.get(session.session_id, session.title)
         session.events.sort(key=lambda event: event.timestamp)
     return [session for session in sessions if session.events]
 
@@ -119,6 +123,8 @@ def _read(path: Path, seen_usage: set[tuple]) -> tuple[Session, str] | None:
 
         if record_type == "turn_context":
             model = _string(payload.get("model")) or model
+            if effort := _reasoning_effort(payload):
+                session.reasoning_efforts.add(effort)
             continue
 
         sidechain = bool(parent_id)
@@ -310,6 +316,7 @@ def _usage(
             timestamp=timestamp,
             input_tokens=uncached - cache_write,
             output_tokens=counts.get("output_tokens", 0),
+            reasoning_tokens=counts.get("reasoning_output_tokens", 0),
             cache_write_tokens=cache_write,
             cache_read_tokens=cached,
             cache_write_requires_explicit_price=True,
@@ -356,6 +363,20 @@ def _json_object(value: str) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _reasoning_effort(payload: dict) -> str:
+    candidates = [payload.get("effort"), payload.get("reasoning_effort")]
+    settings = payload.get("thread_settings")
+    if isinstance(settings, dict):
+        candidates.append(settings.get("reasoning_effort"))
+        collaboration = settings.get("collaboration_mode")
+        if isinstance(collaboration, dict) and isinstance(collaboration.get("settings"), dict):
+            candidates.append(collaboration["settings"].get("reasoning_effort"))
+    collaboration = payload.get("collaboration_mode")
+    if isinstance(collaboration, dict) and isinstance(collaboration.get("settings"), dict):
+        candidates.append(collaboration["settings"].get("reasoning_effort"))
+    return next((_string(value).lower() for value in candidates if _string(value)), "")
+
+
 def _timestamp(value) -> datetime | None:
     if not isinstance(value, str):
         return None
@@ -371,3 +392,36 @@ def _string(value) -> str:
 
 def _root(root: Path | None) -> Path:
     return root or Path(os.environ.get("CODEX_HOME", ROOT))
+
+
+def _titles(root: Path) -> dict[str, str]:
+    """Read app-managed thread names without requiring a particular state DB version."""
+    titles: dict[str, str] = {}
+    paths = sorted(
+        root.glob("state_*.sqlite"),
+        key=lambda path: (
+            int(match.group(1))
+            if (match := re.fullmatch(r"state_(\d+)\.sqlite", path.name))
+            else -1
+        ),
+        reverse=True,
+    )
+    for path in paths:
+        try:
+            with sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True) as database:
+                columns = {row[1] for row in database.execute("PRAGMA table_info(threads)")}
+                if not {"id", "title"} <= columns:
+                    continue
+                title = (
+                    "COALESCE(NULLIF(name, ''), NULLIF(title, ''))"
+                    if "name" in columns
+                    else "NULLIF(title, '')"
+                )
+                for session_id, value in database.execute(
+                    f"SELECT id, {title} FROM threads WHERE {title} IS NOT NULL"
+                ):
+                    if isinstance(session_id, str) and isinstance(value, str):
+                        titles.setdefault(session_id, value)
+        except (OSError, sqlite3.Error):
+            continue
+    return titles

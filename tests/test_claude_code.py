@@ -134,6 +134,25 @@ def test_continued_session_keeps_copied_records_once(tmp_path: Path):
     assert sessions["s2"].usage == {}
 
 
+@pytest.mark.parametrize("field", ["reasoning_tokens", "thinking_tokens"])
+def test_exact_thinking_tokens_are_loaded_when_present(tmp_path: Path, field: str):
+    project = tmp_path / "-repos-demo"
+    project.mkdir()
+    records = [
+        _user("2026-09-01T10:00:00Z", "think carefully"),
+        _assistant(
+            "2026-09-01T10:00:05Z",
+            "m1",
+            [{"type": "text", "text": "Done"}],
+            {"input_tokens": 10, "output_tokens": 8, field: 3},
+        ),
+    ]
+    (project / "s1.jsonl").write_text("\n".join(json.dumps(record) for record in records))
+
+    [session] = claude_code.load_sessions(tmp_path)
+    assert session.usage["m1"].reasoning_tokens == 3
+
+
 def test_rule_tags(root: Path):
     [s] = claude_code.load_sessions(root)
     rules.tag_session(s)

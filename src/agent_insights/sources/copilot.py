@@ -84,7 +84,13 @@ def _read_chat_session(path: Path, cwd: str) -> Session | None:
         return None
     session_id = _string(root.get("sessionId")) or path.stem
     project = repo_name(cwd) or (Path(cwd).name if cwd else "copilot-chat")
-    session = Session(agent="copilot", session_id=session_id, project=project, cwd=cwd)
+    session = Session(
+        agent="copilot",
+        session_id=session_id,
+        project=project,
+        cwd=cwd,
+        title=_chat_title(root),
+    )
     created = _timestamp(root.get("creationDate"))
 
     for index, request in enumerate(root.get("requests") or []):
@@ -123,7 +129,8 @@ def _read_chat_session(path: Path, cwd: str) -> Session | None:
         output_tokens = _positive_int(metadata.get("outputTokens")) or _positive_int(
             request.get("completionTokens")
         )
-        if input_tokens or output_tokens:
+        reasoning_tokens = _thinking_tokens(metadata)
+        if input_tokens or output_tokens or reasoning_tokens:
             model = _string(metadata.get("resolvedModel"))
             if not model:
                 model = _string(request.get("modelId")).removeprefix("copilot/") or "unknown"
@@ -133,6 +140,7 @@ def _read_chat_session(path: Path, cwd: str) -> Session | None:
                 timestamp=timestamp,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                reasoning_tokens=reasoning_tokens,
             )
 
     session.events.sort(key=lambda event: event.timestamp)
@@ -142,15 +150,20 @@ def _read_chat_session(path: Path, cwd: str) -> Session | None:
 def _read_event_journal(path: Path, cwd: str, transcript: bool) -> Session | None:
     records = list(_records(path))
     session_id = path.stem if transcript else path.parent.name
+    title = ""
     for record in records:
         if record.get("type") == "session.start":
             session_id = _nested_string(record, "data", "sessionId") or session_id
+            title = _nested_string(record, "data", "title") or _nested_string(
+                record, "data", "customTitle"
+            )
             break
     session = Session(
         agent="copilot",
         session_id=session_id,
         project=repo_name(cwd) or (Path(cwd).name if cwd else "copilot"),
         cwd=cwd,
+        title=title,
     )
     model = ""
     previous_rollup: dict[str, dict[str, int]] = {}
@@ -212,7 +225,12 @@ def _read_event_journal(path: Path, cwd: str, transcript: bool) -> Session | Non
                     continue
                 current = {
                     name: _positive_int(usage.get(name))
-                    for name in ("inputTokens", "cacheReadTokens", "cacheWriteTokens")
+                    for name in (
+                        "inputTokens",
+                        "cacheReadTokens",
+                        "cacheWriteTokens",
+                        "reasoningTokens",
+                    )
                 }
                 previous = previous_rollup.get(model_name, {})
                 if current["inputTokens"] < previous.get("inputTokens", 0):
@@ -223,8 +241,9 @@ def _read_event_journal(path: Path, cwd: str, transcript: bool) -> Session | Non
                 previous_rollup[model_name] = current
                 cache_read = delta["cacheReadTokens"]
                 cache_write = delta["cacheWriteTokens"]
+                reasoning = delta["reasoningTokens"]
                 uncached = max(0, delta["inputTokens"] - cache_read - cache_write)
-                if not (uncached or cache_read or cache_write):
+                if not (uncached or cache_read or cache_write or reasoning):
                     continue
                 count = shutdown_count.get(model_name, 0) + 1
                 shutdown_count[model_name] = count
@@ -232,6 +251,7 @@ def _read_event_journal(path: Path, cwd: str, transcript: bool) -> Session | Non
                     model=model_name,
                     timestamp=shutdown_ts,
                     input_tokens=uncached,
+                    reasoning_tokens=reasoning,
                     cache_read_tokens=cache_read,
                     cache_write_tokens=cache_write,
                     cache_write_requires_explicit_price=True,
@@ -339,6 +359,27 @@ def _chat_tools(metadata: dict) -> list[tuple[str, str, dict]]:
                 )
             )
     return found
+
+
+def _thinking_tokens(metadata: dict) -> int:
+    total = 0
+    for round_ in metadata.get("toolCallRounds") or []:
+        if not isinstance(round_, dict) or not isinstance(round_.get("thinking"), dict):
+            continue
+        total += _positive_int(round_["thinking"].get("tokens"))
+    return total
+
+
+def _chat_title(root: dict) -> str:
+    if title := _string(root.get("customTitle") or root.get("title")):
+        return title
+    for request in root.get("requests") or []:
+        if not isinstance(request, dict) or not isinstance(request.get("response"), list):
+            continue
+        for part in request["response"]:
+            if isinstance(part, dict) and (title := _string(part.get("generatedTitle"))):
+                return title
+    return ""
 
 
 def _event_tools(value) -> list[tuple[str, str, dict]]:

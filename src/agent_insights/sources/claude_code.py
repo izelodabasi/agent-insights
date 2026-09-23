@@ -188,6 +188,7 @@ def _add_usage(session: Session, rec: dict, usage_owner: dict[str, str]) -> None
         timestamp=datetime.fromisoformat(rec["timestamp"]),
         input_tokens=usage.get("input_tokens", 0),
         output_tokens=usage.get("output_tokens", 0),
+        reasoning_tokens=usage.get("reasoning_tokens", usage.get("thinking_tokens", 0)),
         cache_write_tokens=usage.get("cache_creation_input_tokens", 0),
         cache_write_1h_tokens=(usage.get("cache_creation") or {}).get(
             "ephemeral_1h_input_tokens", 0

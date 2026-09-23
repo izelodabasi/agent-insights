@@ -163,6 +163,10 @@ def _totals(sessions: list[Session], spent: dict[str, float]) -> dict:
         "cost": round(sum(spent.values()), 2),
         "tokens_in": sum(u.input_tokens for u in usage),
         "tokens_out": sum(u.output_tokens for u in usage),
+        "tokens_reasoning": sum(u.reasoning_tokens for u in usage),
+        "reasoning_efforts": dict(
+            Counter(effort for s in sessions for effort in s.reasoning_efforts)
+        ),
         "tokens_cached": sum(u.cache_read_tokens for u in usage),
         "tokens_written": sum(u.cache_write_tokens for u in usage),
         "tags": _tag_counts(sessions),
@@ -207,6 +211,7 @@ def _models(sessions: list[Session], prices: Prices) -> list[dict]:
                     "agents": Counter(),
                     "input": 0,
                     "output": 0,
+                    "reasoning": 0,
                     "cache_write": 0,
                     "cache_read": 0,
                     "cost": 0.0,
@@ -216,6 +221,7 @@ def _models(sessions: list[Session], prices: Prices) -> list[dict]:
             m["agents"][s.agent] += 1
             m["input"] += u.input_tokens
             m["output"] += u.output_tokens
+            m["reasoning"] += u.reasoning_tokens
             m["cache_write"] += u.cache_write_tokens
             m["cache_read"] += u.cache_read_tokens
             if (c := cost(u, prices)) is None:
@@ -269,13 +275,14 @@ def _tools(sessions: list[Session]) -> list[dict]:
 
 
 def _turn_spend(s: Session, prices: Prices) -> tuple[list[datetime], list[list]]:
-    """Start time of each turn, and [output tokens, cost] of the agent's work in it."""
+    """Start time and [output tokens, reasoning tokens, cost] for each turn."""
     starts = [opener.timestamp for opener, _ in turns(s)]
-    spend = [[0, 0.0] for _ in starts]
+    spend = [[0, 0, 0.0] for _ in starts]
     for u in s.usage.values():
         if (i := bisect_right(starts, u.timestamp or s.start) - 1) >= 0:
             spend[i][0] += u.output_tokens
-            spend[i][1] += cost(u, prices) or 0.0
+            spend[i][1] += u.reasoning_tokens
+            spend[i][2] += cost(u, prices) or 0.0
     return starts, spend
 
 
@@ -286,7 +293,7 @@ def _messages(sessions: list[Session], prices: Prices) -> list[dict]:
         starts, spend = _turn_spend(s, prices)
         for e in s.user_messages():
             i = bisect_right(starts, e.timestamp) - 1
-            out_tokens, turn_cost = spend[i] if i >= 0 else (0, 0.0)
+            out_tokens, reasoning_tokens, turn_cost = spend[i] if i >= 0 else (0, 0, 0.0)
             messages.append(
                 {
                     "agent": s.agent,
@@ -295,6 +302,7 @@ def _messages(sessions: list[Session], prices: Prices) -> list[dict]:
                     "ts": e.timestamp.astimezone().isoformat(timespec="minutes"),
                     "kind": e.kind.value,
                     "tokens_out": out_tokens,
+                    "reasoning_tokens": reasoning_tokens,
                     "cost": round(turn_cost, 4),
                     "text": e.text[:1500],
                     "tags": sorted(e.tags),
@@ -315,6 +323,18 @@ def _session_row(s: Session, spent: float, perf: dict) -> dict:
         "prompts": len(s.of(Kind.PROMPT)),
         "cost": round(spent, 2),
         "cost_per_call": round(spent / len(s.usage), 4) if s.usage else 0,
+        "reasoning_tokens": sum(u.reasoning_tokens for u in s.usage.values()),
+        "reasoning_efforts": sorted(
+            s.reasoning_efforts,
+            key=lambda effort: {
+                "minimal": 0,
+                "low": 1,
+                "medium": 2,
+                "high": 3,
+                "xhigh": 4,
+                "max": 5,
+            }.get(effort, 99),
+        ),
         "commits": [commit_subject(e.tool_input.get("command", "")) for e in successful_commits(s)],
         "files_edited": len(_edited_files(s)),
         "tags": sorted(s.tags),

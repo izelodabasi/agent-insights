@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -35,7 +36,11 @@ def test_load_codex_session(tmp_path: Path):
             "session_meta",
             {"id": "s1", "cwd": "/repos/demo", "git": {"branch": "main"}, "source": "cli"},
         ),
-        _record("2026-09-23T10:00:01Z", "turn_context", {"model": "gpt-5.6-sol"}),
+        _record(
+            "2026-09-23T10:00:01Z",
+            "turn_context",
+            {"model": "gpt-5.6-sol", "effort": "high"},
+        ),
         _record(
             "2026-09-23T10:00:02Z",
             "response_item",
@@ -93,6 +98,8 @@ def test_load_codex_session(tmp_path: Path):
     [found] = session.usage.values()
     assert (found.input_tokens, found.cache_read_tokens, found.cache_write_tokens) == (30, 60, 10)
     assert found.output_tokens == 20
+    assert found.reasoning_tokens == 5
+    assert session.reasoning_efforts == {"high"}
     assert found.cache_write_requires_explicit_price
     rules.tag_session(session)
     assert "testing" in session.tags
@@ -256,6 +263,36 @@ def test_rejects_file_without_session_meta_first(tmp_path: Path):
     ]
     _write(tmp_path, "foreign", records)
     assert codex.load_sessions(tmp_path) == []
+
+
+def test_loads_app_thread_name_with_generated_title_fallback(tmp_path: Path):
+    records = [
+        _record("2026-09-23T10:00:00Z", "session_meta", {"id": "named", "cwd": "/demo"}),
+        _record(
+            "2026-09-23T10:00:01Z",
+            "response_item",
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "go"}]},
+        ),
+    ]
+    _write(tmp_path, "named", records)
+    database = sqlite3.connect(tmp_path / "state_5.sqlite")
+    database.execute("CREATE TABLE threads (id TEXT, title TEXT, name TEXT)")
+    database.execute(
+        "INSERT INTO threads VALUES (?, ?, ?)",
+        ("named", "Generated title", "Renamed chat"),
+    )
+    database.commit()
+    database.close()
+
+    [session] = codex.load_sessions(tmp_path)
+    assert session.title == "Renamed chat"
+
+    database = sqlite3.connect(tmp_path / "state_5.sqlite")
+    database.execute("UPDATE threads SET name = NULL WHERE id = 'named'")
+    database.commit()
+    database.close()
+    [session] = codex.load_sessions(tmp_path)
+    assert session.title == "Generated title"
 
 
 def test_archived_copy_is_not_loaded_twice(tmp_path: Path):
