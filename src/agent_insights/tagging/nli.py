@@ -3,7 +3,7 @@ from agent_insights.tagging.classifier import CACHE_DIR, Classifier, device, sco
 
 MODEL = "MoritzLaurer/deberta-v3-large-zeroshot-v2.0"
 LABELS = {
-    "frustrated": "The user is frustrated or annoyed with the assistant.",
+    "disliked": "The user is frustrated, annoyed, or dissatisfied with the assistant's answer.",
     "correction": "The user is correcting a mistake the assistant made.",
     "style": "The user is stating a coding style or workflow preference.",
     "approval": "The user approves or is satisfied with the work.",
@@ -14,7 +14,11 @@ LABELS = {
 
 def tag_sessions(sessions: list[Session], threshold: float = 0.8) -> None:
     for e, scores in score_messages(sessions, CACHE_DIR / "nli_tags.json", _load, 16):
-        e.tags |= {label for label, score in scores.items() if score >= threshold}
+        # Older caches used "frustrated" for this same classification.
+        scores["disliked"] = max(scores.get("disliked", 0), scores.get("frustrated", 0))
+        e.tags |= {
+            label for label, score in scores.items() if score >= threshold and label != "frustrated"
+        }
 
 
 def _load() -> Classifier:

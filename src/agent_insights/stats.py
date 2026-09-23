@@ -10,7 +10,7 @@ from agent_insights.models import Event, Kind, Session
 from agent_insights.tagging.rules import EDIT_TOOLS, successful_commits, turns
 
 TAG_WEIGHTS = {
-    "frustrated": 1.0,
+    "disliked": 1.0,
     "correction": 0.8,
     "rejected": 0.6,
     "low_performance": 0.6,
@@ -177,6 +177,7 @@ def _project(
     turns_total = sum(p["turns"] for p in scored)
     return {
         "name": name,
+        "agents": dict(Counter(s.agent for s in sessions)),
         "sessions": len(sessions),
         "prompts": len(_prompts(sessions)),
         "tool_calls": sum(1 for e in events if e.kind == Kind.TOOL_USE),
@@ -197,27 +198,32 @@ def _project(
 
 def _models(sessions: list[Session], prices: Prices) -> list[dict]:
     models: dict[str, dict] = {}
-    for u in (u for s in sessions for u in s.usage.values()):
-        m = models.setdefault(
-            u.model,
-            {
-                "model": u.model,
-                "input": 0,
-                "output": 0,
-                "cache_write": 0,
-                "cache_read": 0,
-                "cost": 0.0,
-                "priced": True,
-            },
-        )
-        m["input"] += u.input_tokens
-        m["output"] += u.output_tokens
-        m["cache_write"] += u.cache_write_tokens
-        m["cache_read"] += u.cache_read_tokens
-        if (c := cost(u, prices)) is None:
-            m["priced"] = False
-        else:
-            m["cost"] += c
+    for s in sessions:
+        for u in s.usage.values():
+            m = models.setdefault(
+                u.model,
+                {
+                    "model": u.model,
+                    "agents": Counter(),
+                    "input": 0,
+                    "output": 0,
+                    "cache_write": 0,
+                    "cache_read": 0,
+                    "cost": 0.0,
+                    "priced": True,
+                },
+            )
+            m["agents"][s.agent] += 1
+            m["input"] += u.input_tokens
+            m["output"] += u.output_tokens
+            m["cache_write"] += u.cache_write_tokens
+            m["cache_read"] += u.cache_read_tokens
+            if (c := cost(u, prices)) is None:
+                m["priced"] = False
+            else:
+                m["cost"] += c
+    for model in models.values():
+        model["agents"] = dict(model["agents"])
     return sorted(models.values(), key=lambda m: m["cost"], reverse=True)
 
 
@@ -243,18 +249,22 @@ def _hours(sessions: list[Session]) -> list[int]:
 
 def _tools(sessions: list[Session]) -> list[dict]:
     tools: dict[str, Counter] = defaultdict(Counter)
+    agents: dict[str, Counter] = defaultdict(Counter)
     for s in sessions:
         names = {e.tool_id: e.tool for e in s.of(Kind.TOOL_USE)}
         for e in s.events:
             match e.kind:
                 case Kind.TOOL_USE:
                     tools[e.tool]["calls"] += 1
+                    agents[e.tool][s.agent] += 1
                 case Kind.TOOL_RESULT if e.is_error:
                     tools[names.get(e.tool_id, "?")]["errors"] += 1
                 case Kind.REJECTION:
                     tools[names.get(e.tool_id, "?")]["rejections"] += 1
     return sorted(
-        ({"tool": t, **c} for t, c in tools.items()), key=lambda t: t["calls"], reverse=True
+        ({"tool": t, "agents": dict(agents[t]), **c} for t, c in tools.items()),
+        key=lambda t: t["calls"],
+        reverse=True,
     )
 
 
@@ -279,6 +289,7 @@ def _messages(sessions: list[Session], prices: Prices) -> list[dict]:
             out_tokens, turn_cost = spend[i] if i >= 0 else (0, 0.0)
             messages.append(
                 {
+                    "agent": s.agent,
                     "project": s.project,
                     "session": s.session_id,
                     "ts": e.timestamp.astimezone().isoformat(timespec="minutes"),

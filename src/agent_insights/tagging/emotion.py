@@ -2,18 +2,18 @@ from agent_insights.models import Session
 from agent_insights.tagging.classifier import CACHE_DIR, Classifier, device, score_messages
 
 MODEL = "SamLowe/roberta-base-go_emotions"
-FRUSTRATION = ("annoyance", "anger", "disapproval", "disappointment")
+DISLIKE_SIGNALS = ("annoyance", "anger", "disapproval", "disappointment")
 
 
 def tag_sessions(sessions: list[Session], threshold: float = 0.3) -> None:
-    """Tag a user message frustrated when any GoEmotions frustration label reaches threshold.
+    """Tag a message disliked when a negative GoEmotions signal reaches the threshold.
 
     Zero-shot NLI misses short complaints with no mention of the assistant ("bro looks
     shit"); GoEmotions was trained on exactly that register.
     """
     for e, scores in score_messages(sessions, CACHE_DIR / "emotion_scores.json", _load, 32):
-        if max(scores.get(label, 0) for label in FRUSTRATION) >= threshold:
-            e.tags.add("frustrated")
+        if max(scores.get(label, 0) for label in DISLIKE_SIGNALS) >= threshold:
+            e.tags.add("disliked")
 
 
 def _load() -> Classifier:

@@ -3,8 +3,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from agent_insights.models import Event, Kind, Session
-from agent_insights.stats import _cost_factor, commit_subject, performance, score_trend
+from agent_insights.models import Event, Kind, Session, Usage
+from agent_insights.stats import _cost_factor, commit_subject, performance, score_trend, summarize
 
 TS = datetime(2026, 9, 1, tzinfo=UTC)
 
@@ -26,7 +26,7 @@ def _session(*turn_tags: set[str], commit: bool = False) -> Session:
 
 
 def test_score_decays_with_friction_per_turn():
-    s = _session({"frustrated"}, {"interrupted"}, set(), set())
+    s = _session({"disliked"}, {"interrupted"}, set(), set())
     expected = round(100 * math.exp(-3 * (1.0 + 0.4) / 4))
     assert performance(s) == {"score": expected, "turns": 4, "bad_turns": 2}
 
@@ -72,3 +72,25 @@ def test_commit_multiplies_score_and_caps_at_100():
 )
 def test_commit_subject(command: str, subject: str):
     assert commit_subject(command) == subject
+
+
+def test_all_agent_rows_keep_their_source_attribution():
+    codex = _session(set())
+    codex.agent = "codex"
+    codex.session_id = "codex-session"
+    codex.project = "shared"
+    codex.usage["c"] = Usage(model="shared-model", timestamp=TS, output_tokens=10)
+    codex.events.append(Event(kind=Kind.TOOL_USE, timestamp=TS, tool="Read", tool_id="c"))
+
+    copilot = _session(set())
+    copilot.agent = "copilot"
+    copilot.session_id = "copilot-session"
+    copilot.project = "shared"
+    copilot.usage["p"] = Usage(model="shared-model", timestamp=TS, output_tokens=20)
+    copilot.events.append(Event(kind=Kind.TOOL_USE, timestamp=TS, tool="Read", tool_id="p"))
+
+    result = summarize([codex, copilot], {})
+    assert result["projects"][0]["agents"] == {"codex": 1, "copilot": 1}
+    assert result["models"][0]["agents"] == {"codex": 1, "copilot": 1}
+    assert result["tools"][0]["agents"] == {"codex": 1, "copilot": 1}
+    assert {message["agent"] for message in result["messages"]} == {"codex", "copilot"}

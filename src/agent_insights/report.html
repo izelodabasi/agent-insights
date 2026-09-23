@@ -40,7 +40,10 @@ header { position: sticky; top: 0; z-index: 5; background: var(--surface); borde
 .titlebar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding-block: 16px 10px; }
 h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
 .meta { font: 12px var(--mono); color: var(--muted); }
-.titlebar select { margin-left: auto; }
+.titlebar select { margin-left: 0; }
+.agent-key { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.agent-key-item { display: inline-flex; opacity: .38; transition: opacity .15s ease; }
+.agent-key-item.on { opacity: 1; }
 nav { display: flex; gap: 2px; overflow-x: auto; margin-bottom: -1px; }
 nav button { border: 0; background: none; color: var(--text-2); padding: 8px 12px 10px; cursor: pointer;
   border-bottom: 2px solid transparent; white-space: nowrap; font-weight: 500; }
@@ -115,16 +118,26 @@ input[type=search] { flex: 1; min-width: 180px; }
 .tags { display: flex; flex-wrap: wrap; gap: 4px; min-width: 260px; }
 .tags .tag { margin: 0; }
 .tag b { font: 500 11.5px var(--mono); color: var(--text); }
+.agent-stack { display: flex; flex-wrap: wrap; gap: 5px; min-width: 120px; }
+.agent-badge { --agent-color: var(--muted); display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--agent-color) 42%, var(--border)); border-radius: 999px;
+  background: color-mix(in srgb, var(--agent-color) 9%, var(--surface)); color: var(--text-2);
+  padding: 2px 8px 2px 3px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.agent-mark { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--agent-color); color: white; font: 600 10px/1 var(--sans); }
+.agent-count { color: var(--muted); font: 500 11px var(--mono); }
 .score { display: inline-flex; align-items: center; gap: 6px; }
 .spark { display: block; overflow: visible; }
 .spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; }
 .spark circle { fill: var(--accent); }
 .spark .mid { stroke: var(--border); stroke-dasharray: 2 3; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--muted)); flex: none; }
-.legend { display: flex; flex-wrap: wrap; gap: 16px; color: var(--text-2); font-size: 12.5px; }
-.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend { display: flex; flex-wrap: wrap; gap: 7px; color: var(--text-2); font-size: 12px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); }
 
-.msg { padding: 12px 16px; border-top: 1px solid var(--border); }
+.msg { --agent-color: var(--muted); padding: 12px 16px 12px 13px; border-top: 1px solid var(--border);
+  border-left: 3px solid var(--agent-color); }
 .msg:first-child { border-top: 0; }
 .msg .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-bottom: 6px; }
 .msg pre { white-space: pre-wrap; word-break: break-word; margin: 0; font: 14px/1.55 var(--sans); max-width: 90ch; }
@@ -139,6 +152,7 @@ input[type=search] { flex: 1; min-width: 180px; }
     <div class="titlebar">
       <h1>Agent Insights</h1>
       <span class="meta" id="sub"></span>
+      <span class="agent-key" id="agent-key"></span>
       <select id="agent" aria-label="Agent"></select>
     </div>
     <nav id="nav">
@@ -199,17 +213,32 @@ const usd = n => "$" + Number(n).toLocaleString(undefined, {minimumFractionDigit
 const when = ts => ts.slice(0, 16).replace("T", " ");
 const tok = n => n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : num(n);
 const FAMILIES = [
-  ["friction", "--c-red", ["frustrated", "rejected", "correction"]],
-  ["stalled", "--c-orange", ["interrupted", "low_performance"]],
-  ["win", "--c-green", ["approval", "committed"]],
-  ["intent", "--c-blue", ["question", "new_task", "testing", "debugging"]],
-  ["preference", "--c-violet", ["style"]],
+  ["Needs attention", "--c-red", ["disliked", "rejected", "correction"]],
+  ["Stopped or stuck", "--c-orange", ["interrupted", "low_performance"]],
+  ["Positive outcome", "--c-green", ["approval", "committed"]],
+  ["Work context", "--c-blue", ["question", "new_task", "testing", "debugging"]],
+  ["Preferences", "--c-violet", ["style"]],
 ];
+const TAG_LABELS = {
+  disliked: "Disliked", rejected: "Rejected", correction: "Correction",
+  interrupted: "Interrupted", low_performance: "Struggled",
+  approval: "Approved", committed: "Committed", question: "Question",
+  new_task: "New task", testing: "Testing", debugging: "Debugging", style: "Preference",
+};
+const tagLabel = t => TAG_LABELS[t] || String(t).replaceAll("_", " ");
 const tagColor = t => { const f = FAMILIES.find(f => f[2].includes(t)); return f ? `var(${f[1]})` : "var(--muted)"; };
 const dot = t => `<i class="dot" style="--c: ${tagColor(t)}"></i>`;
-const tagList = tags => tags.map(t => `<span class="tag">${dot(t)}${esc(t)}</span>`).join("");
+const tagList = tags => tags.map(t => `<span class="tag">${dot(t)}${esc(tagLabel(t))}</span>`).join("");
 const tagCounts = t => `<div class="tags">${Object.entries(t || {}).sort((a, b) => b[1] - a[1])
-  .map(([k, v]) => `<span class="tag">${dot(k)}${esc(k)}<b>${num(v)}</b></span>`).join("")}</div>`;
+  .map(([k, v]) => `<span class="tag">${dot(k)}${esc(tagLabel(k))}<b>${num(v)}</b></span>`).join("")}</div>`;
+const AGENTS = {
+  "claude-code": {label: "Claude Code", mark: "C", color: "var(--c-orange)"},
+  codex: {label: "Codex", mark: "X", color: "var(--c-green)"},
+  copilot: {label: "Copilot", mark: "P", color: "var(--c-violet)"},
+};
+const agentInfo = name => AGENTS[name] || {label: name, mark: String(name).slice(0, 1).toUpperCase(), color: "var(--c-blue)"};
+const agentBadge = (name, count) => { const a = agentInfo(name); return `<span class="agent-badge" style="--agent-color:${a.color}" title="${esc(a.label)}${count ? ` · ${num(count)}` : ""}"><span class="agent-mark">${esc(a.mark)}</span>${esc(a.label)}${count ? `<span class="agent-count">${num(count)}</span>` : ""}</span>`; };
+const agentBadges = agents => `<div class="agent-stack">${Object.entries(agents || {}).map(([name, count]) => agentBadge(name, count)).join("")}</div>`;
 
 function showTab(name) {
   document.querySelectorAll(".tab").forEach(s => s.classList.toggle("on", s.id === `tab-${name}`));
@@ -221,7 +250,7 @@ addEventListener("hashchange", fromHash);
 fromHash();
 
 $("sub").textContent = `generated ${DATA.generated.replace("T", " ")}`;
-$("agent").innerHTML = [["all", "All agents"], ...DATA.agents.map(a => [a, a])]
+$("agent").innerHTML = [["all", "All agents"], ...DATA.agents.map(a => [a, agentInfo(a).label])]
   .map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("");
 $("legend").innerHTML = FAMILIES.map(([name, c]) =>
   `<span><i class="dot" style="--c: var(${c})"></i>${name}</span>`).join("");
@@ -230,6 +259,10 @@ let V, T;
 function renderAll() {
   V = DATA.views[$("agent").value];
   T = V.totals;
+  const selectedAgent = $("agent").value;
+  $("agent-key").innerHTML = DATA.agents.map(a =>
+    `<span class="agent-key-item${selectedAgent === "all" || selectedAgent === a ? " on" : ""}">${agentBadge(a)}</span>`
+  ).join("");
   $("tiles").innerHTML = [
     [num(T.sessions), "sessions"], [num(T.projects), "projects"], [num(T.prompts), "prompts"],
     [num(T.active_hours), "active hours"], [usd(T.cost), "cost at API prices"],
@@ -327,13 +360,14 @@ function table(el, cols, rows, onCount) {
 function renderTables() {
   const tagMax = Math.max(1, ...Object.values(T.tags));
   table($("tags"), [
-    {k: "tag", h: "Tag", f: v => `<span class="hbar">${dot(v)}${esc(v)}</span>`},
+    {k: "tag", h: "Tag", f: v => `<span class="hbar">${dot(v)}${esc(tagLabel(v))}</span>`},
     {k: "count", h: "Count", f: v => `<div class="hbar"><i class="fill" style="width:${Math.round(160 * v / tagMax)}px"></i><span class="v">${num(v)}</span></div>`},
   ], Object.entries(T.tags).map(([tag, count]) => ({tag, count})).sort((a, b) => b.count - a.count),
   );
 
   table($("projects"), [
-    {k: "name", h: "Project"}, {k: "score", h: "Score", n: 1, f: scoreCell},
+    {k: "name", h: "Project"}, {k: "agents", h: "Agents", f: agentBadges},
+    {k: "score", h: "Score", n: 1, f: scoreCell},
     {k: "turns", h: "Turns", n: 1, f: num}, {k: "bad_turns", h: "Bad turns", n: 1, f: num},
     {k: "sessions", h: "Sessions", n: 1, f: num}, {k: "prompts", h: "Prompts", n: 1, f: num},
     {k: "tool_calls", h: "Tool calls", n: 1, f: num}, {k: "tool_errors", h: "Failed tool calls", n: 1, f: num},
@@ -346,6 +380,7 @@ function renderTables() {
 
   table($("models"), [
     {k: "model", h: "Model", f: v => `<span class="mono">${esc(v)}</span>`},
+    {k: "agents", h: "Agents", f: agentBadges},
     {k: "input", h: "Input", n: 1, f: num}, {k: "output", h: "Output", n: 1, f: num},
     {k: "cache_read", h: "Cache read", n: 1, f: num}, {k: "cache_write", h: "Cache write", n: 1, f: num},
     {k: "cost", h: "Cost", n: 1, f: (v, r) => r.priced ? usd(v) : "unpriced"},
@@ -353,6 +388,7 @@ function renderTables() {
 
   table($("tools"), [
     {k: "tool", h: "Tool", f: v => `<span class="mono">${esc(v)}</span>`},
+    {k: "agents", h: "Agents", f: agentBadges},
     {k: "calls", h: "Calls", n: 1, f: v => num(v || 0)},
     {k: "errors", h: "Failed", n: 1, f: v => num(v || 0)}, {k: "rejections", h: "Rejected by you", n: 1, f: v => num(v || 0)},
   ], V.tools);
@@ -363,7 +399,7 @@ function renderSessions() {
     {k: "start", h: "Start", f: v => `<span class="mono">${when(v)}</span>`},
     {k: "end", h: "End", f: v => `<span class="mono">${when(v)}</span>`},
     {k: "name", h: "Name", f: v => v ? `<span class="text">${esc(v)}</span>` : `<span class="none">untitled</span>`},
-    {k: "agent", h: "Agent"}, {k: "project", h: "Project"}, {k: "prompts", h: "Prompts", n: 1, f: num},
+    {k: "agent", h: "Agent", f: agentBadge}, {k: "project", h: "Project"}, {k: "prompts", h: "Prompts", n: 1, f: num},
     {k: "active_min", h: "Active minutes", n: 1, f: num}, {k: "cost", h: "Cost", n: 1, f: usd},
     {k: "score", h: "Score", n: 1, f: scoreCell},
     {k: "trend", h: "Score trend", f: sparkline},
@@ -382,7 +418,7 @@ function renderFilters() {
   $("f-project").innerHTML = `<option value="">All projects</option>` +
     projects.map(p => `<option${p === keep ? " selected" : ""}>${esc(p)}</option>`).join("");
   $("f-tags").innerHTML = Object.keys(T.tags).sort().map(t =>
-    `<button class="chip${active.has(t) ? " on" : ""}" data-t="${esc(t)}">${dot(t)}${esc(t)}</button>`).join("");
+    `<button class="chip${active.has(t) ? " on" : ""}" data-t="${esc(t)}">${dot(t)}${esc(tagLabel(t))}</button>`).join("");
   $("f-tags").querySelectorAll(".chip").forEach(b => b.onclick = () => {
     active.has(b.dataset.t) ? active.delete(b.dataset.t) : active.add(b.dataset.t);
     b.classList.toggle("on");
@@ -396,9 +432,10 @@ function renderMessages() {
     (!p || m.project === p) && (!q || m.text.toLowerCase().includes(q)) &&
     [...active].every(t => m.tags.includes(t)));
   $("msg-count").textContent = num(rows.length);
-  $("messages").innerHTML = rows.slice(0, limit).map(m =>
-    `<div class="msg"><div class="meta"><span>${esc(when(m.ts))}</span><span>${esc(m.project)}</span>${m.kind === "rejection" ? "<span>rejection reason</span>" : ""}<span>${tok(m.tokens_out)} tokens out · ${usd(m.cost)}</span>${tagList(m.tags)}</div><pre>${esc(m.text)}</pre></div>`
-  ).join("") || `<p class="empty">No messages match.</p>`;
+  $("messages").innerHTML = rows.slice(0, limit).map(m => {
+    const agent = agentInfo(m.agent);
+    return `<div class="msg" style="--agent-color:${agent.color}"><div class="meta">${agentBadge(m.agent)}<span>${esc(when(m.ts))}</span><span>${esc(m.project)}</span>${m.kind === "rejection" ? "<span>rejection reason</span>" : ""}<span>${tok(m.tokens_out)} tokens out · ${usd(m.cost)}</span>${tagList(m.tags)}</div><pre>${esc(m.text)}</pre></div>`;
+  }).join("") || `<p class="empty">No messages match.</p>`;
   $("more").hidden = rows.length <= limit;
   $("more").textContent = `Show more · ${num(rows.length - limit)} left`;
 }

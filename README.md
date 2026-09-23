@@ -2,7 +2,7 @@
 
 `agent-insights` is a personal dashboard for understanding how you work with coding agents—not just how many tokens they use, but where they help, where they get stuck, and which sessions actually end in something useful.
 
-It reads the chat logs already stored on your machine and turns them into one self-contained HTML report. You can explore activity and cost by project or model, see which tools were used, compare session performance, and review moments where you corrected, interrupted, approved, or got frustrated with the agent.
+It reads the chat logs already stored on your machine and turns them into one self-contained HTML report. You can explore activity and cost by project or model, see which tools were used, compare session performance, and review moments where you corrected, interrupted, approved, or disliked an answer.
 
 Nothing is uploaded. Your prompts, code, and project names stay on your computer.
 
@@ -10,8 +10,9 @@ Nothing is uploaded. Your prompts, code, and project names stay on your computer
 
 - Claude Code from `~/.claude/projects`
 - Codex from `$CODEX_HOME/sessions`, or `~/.codex/sessions` by default
+- GitHub Copilot from its CLI journals and VS Code chat history
 
-Codex subagent work is folded into its parent session, and replayed history is filtered out so it does not inflate token or tool counts.
+Codex subagent work is folded into its parent session, and replayed history is filtered out so it does not inflate token or tool counts. Copilot reads both workspace chats and chats that were opened without a workspace.
 
 ## Getting started
 
@@ -58,7 +59,7 @@ Some tags come directly from things that happened in the session:
 - `testing`: the turn ran a test command
 - `debugging`: the agent edited a file after a tool call failed
 
-Other tags look at the wording of your message: `frustrated`, `correction`, `style`, `approval`, `question`, and `new_task`. Classification runs locally with `MoritzLaurer/deberta-v3-large-zeroshot-v2.0` and `SamLowe/roberta-base-go_emotions`; it does not send your messages to an API. Scores are cached under `~/.cache/agent-insights/`.
+Other tags look at the wording of your message: `disliked`, `correction`, `style`, `approval`, `question`, and `new_task`. Classification runs locally with `MoritzLaurer/deberta-v3-large-zeroshot-v2.0` and `SamLowe/roberta-base-go_emotions`; it does not send your messages to an API. Scores are cached under `~/.cache/agent-insights/`.
 
 ## About the score
 
@@ -68,6 +69,6 @@ The exact calculation lives in `src/agent_insights/stats.py`. Session scores are
 
 ## Cost estimates
 
-Prices come from LiteLLM's public model-price table and are cached for 24 hours. The parser handles the different cache-token formats used by Claude Code and Codex, and avoids counting repeated or cumulative usage records twice.
+Prices come from LiteLLM's public model-price table and are cached for 24 hours. The parser handles the different token formats used by Claude Code, Codex, and Copilot, and avoids counting repeated or cumulative usage records twice.
 
 These figures use published API prices. They are useful for comparison, but they may not match what you pay through a subscription plan.
