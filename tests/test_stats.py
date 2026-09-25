@@ -126,3 +126,33 @@ def test_build_includes_complete_rolling_period_views():
     assert result["period_views"]["7"]["all"]["totals"]["sessions"] == 1
     assert result["period_views"]["30"]["claude-code"]["totals"]["sessions"] == 1
     assert result["period_views"]["90"]["all"]["totals"]["sessions"] == 2
+
+
+def test_session_timeline_marks_tools_failures_and_retries():
+    session = _session({"correction"})
+    command = {"command": "uv run pytest"}
+    session.events += [
+        Event(kind=Kind.ASSISTANT, timestamp=TS, text="Running the tests."),
+        Event(kind=Kind.TOOL_USE, timestamp=TS, tool="Bash", tool_id="first", tool_input=command),
+        Event(kind=Kind.TOOL_RESULT, timestamp=TS, tool_id="first", text="failed", is_error=True),
+        Event(kind=Kind.TOOL_USE, timestamp=TS, tool="Bash", tool_id="retry", tool_input=command),
+        Event(kind=Kind.TOOL_RESULT, timestamp=TS, tool_id="retry", text="passed"),
+    ]
+
+    timeline = build([session], {}, ["claude-code"], since=date(2026, 9, 1))[
+        "session_events"
+    ]["claude-code"]["s"]
+
+    assert [event["kind"] for event in timeline] == [
+        "prompt",
+        "assistant",
+        "tool_use",
+        "tool_result",
+        "tool_use",
+        "tool_result",
+    ]
+    assert timeline[0]["flags"] == ["correction"]
+    assert timeline[2]["flags"] == ["test"]
+    assert timeline[3]["flags"] == ["failed"]
+    assert timeline[4]["flags"] == ["retry", "test"]
+    assert timeline[3]["tool"] == "Bash"

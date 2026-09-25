@@ -89,6 +89,8 @@ thead th { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transf
 thead th:hover { color: var(--text-2); }
 tbody td { border-top: 1px solid var(--border); white-space: nowrap; }
 tbody tr:hover td { background: var(--surface-2); }
+tbody tr.openable { cursor: pointer; }
+tbody tr.openable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 td.n, th.n { text-align: right; }
 td.n { font: 13px var(--mono); }
 .arrow { color: var(--accent); }
@@ -142,10 +144,29 @@ input[type=search] { flex: 1; min-width: 180px; }
 .msg { --agent-color: var(--muted); padding: 12px 16px 12px 13px; border-top: 1px solid var(--border);
   border-left: 3px solid var(--agent-color); }
 .msg:first-child { border-top: 0; }
+.msg.openable { cursor: pointer; }
+.msg.openable:hover { background: var(--surface-2); }
+.msg.openable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .msg .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-bottom: 6px; }
 .msg pre { white-space: pre-wrap; word-break: break-word; margin: 0; font: 14px/1.55 var(--sans); max-width: 90ch; }
 .empty { color: var(--text-2); padding: 14px 16px; margin: 0; }
 #more { align-self: flex-start; }
+dialog { width: min(920px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0;
+  color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; }
+dialog::backdrop { background: rgb(10 14 22 / .58); }
+.detail-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: flex-start; gap: 16px;
+  padding: 16px 18px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.detail-head h2 { margin: 0 0 4px; font-size: 17px; }
+.detail-head form { margin-left: auto; }
+.close { border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; background: var(--surface-2); cursor: pointer; }
+.timeline { padding: 8px 18px 20px; }
+.event { padding: 12px 0 12px 18px; border-left: 2px solid var(--border); }
+.event.failed { border-left-color: var(--c-red); }
+.event.retry { border-left-color: var(--c-orange); }
+.event-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 5px; }
+.event-kind { font-weight: 600; }
+.event pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 var(--mono); }
+.event details summary { color: var(--text-2); cursor: pointer; font-size: 12px; margin-bottom: 6px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
@@ -211,6 +232,13 @@ input[type=search] { flex: 1; min-width: 180px; }
     <button class="chip" id="more">Show more</button>
   </section>
 </main>
+<dialog id="session-dialog">
+  <div class="detail-head">
+    <div><h2 id="detail-title"></h2><div class="meta" id="detail-meta"></div></div>
+    <form method="dialog"><button class="close" aria-label="Close session details">Close</button></form>
+  </div>
+  <div class="timeline" id="detail-timeline"></div>
+</dialog>
 <div class="tip" id="tip"></div>
 <script>
 const DATA = /*DATA*/null;
@@ -232,6 +260,7 @@ const TAG_LABELS = {
   interrupted: "Interrupted", low_performance: "Struggled",
   approval: "Approved", committed: "Committed", question: "Question",
   new_task: "New task", testing: "Testing", debugging: "Debugging", style: "Preference",
+  failed: "Failed", retry: "Retry", edit: "Edit", test: "Test", commit: "Commit",
 };
 const tagLabel = t => TAG_LABELS[t] || String(t).replaceAll("_", " ");
 const tagColor = t => { const f = FAMILIES.find(f => f[2].includes(t)); return f ? `var(${f[1]})` : "var(--muted)"; };
@@ -367,7 +396,7 @@ const thinkingCell = (tokens, row) => {
 };
 
 const cellText = v => Array.isArray(v) ? v.join(" ") : v && typeof v === "object" ? Object.keys(v).join(" ") : String(v ?? "");
-function table(el, cols, rows, onCount) {
+function table(el, cols, rows, onCount, onOpen) {
   let key = null, dir = -1;
   el.innerHTML = `<thead><tr>${cols.map(c => `<th class="${c.n ? "n" : ""}" data-k="${c.k}">${c.h}<span class="arrow"></span></th>`).join("")}</tr></thead><tbody></tbody>`;
   const body = el.querySelector("tbody");
@@ -377,8 +406,18 @@ function table(el, cols, rows, onCount) {
       const x = a[key], y = b[key];
       return (typeof x === "number" ? x - y : cellText(x).localeCompare(cellText(y))) * dir;
     });
-    body.innerHTML = shown.map(r => `<tr>${cols.map(c => `<td class="${c.n ? "n" : ""}">${c.f ? c.f(r[c.k], r) : esc(r[c.k])}</td>`).join("")}</tr>`).join("") ||
+    body.innerHTML = shown.map((r, i) => `<tr${onOpen ? ` class="openable" tabindex="0" data-row="${i}"` : ""}>${cols.map(c => `<td class="${c.n ? "n" : ""}">${c.f ? c.f(r[c.k], r) : esc(r[c.k])}</td>`).join("")}</tr>`).join("") ||
       `<tr><td class="none" colspan="${cols.length}">No rows match.</td></tr>`;
+    if (onOpen) body.querySelectorAll("tr[data-row]").forEach(tr => {
+      const open = () => onOpen(shown[Number(tr.dataset.row)]);
+      tr.onclick = open;
+      tr.onkeydown = event => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          open();
+        }
+      };
+    });
     el.querySelectorAll("thead tr:first-child th").forEach(th =>
       th.querySelector(".arrow").textContent = th.dataset.k === key ? (dir > 0 ? " ▲" : " ▼") : "");
     onCount?.(shown.length);
@@ -443,7 +482,40 @@ function renderSessions() {
     {k: "files_edited", h: "Files edited", n: 1, f: num},
     {k: "commits", h: "Commits", f: v => v.map(c => `<div class="commit">${esc(c)}</div>`).join("") || `<span class="none">none</span>`},
     {k: "tags", h: "Tags", f: v => `<div class="tags">${tagList(v)}</div>`},
-  ], V.sessions, n => $("session-count").textContent = num(n));
+  ], V.sessions, n => $("session-count").textContent = num(n), openSession);
+}
+
+const EVENT_LABELS = {
+  prompt: "Prompt", assistant: "Assistant", tool_use: "Tool call", tool_result: "Tool result",
+  rejection: "Rejection", interrupt: "Interrupted", command: "Command", notification: "Notification",
+};
+const sessionDialog = $("session-dialog");
+function eventDetail(event) {
+  if (!event.detail) return "";
+  const content = `<pre>${esc(event.detail)}${event.truncated ? "\n… output truncated" : ""}</pre>`;
+  const collapse = event.kind === "tool_use" || event.kind === "tool_result" || event.detail.length > 600;
+  return collapse ? `<details><summary>Show details</summary>${content}</details>` : content;
+}
+function openSession(row) {
+  $("detail-title").textContent = row.name || "Untitled session";
+  $("detail-meta").innerHTML = `${agentBadge(row.agent)} <span>${esc(row.project)}</span> <span>${esc(when(row.start))}</span>`;
+  const events = DATA.session_events?.[row.agent]?.[row.id] || [];
+  $("detail-timeline").innerHTML = events.map(event => {
+    const flags = event.flags || [];
+    const classes = ["event", flags.includes("failed") ? "failed" : "", flags.includes("retry") ? "retry" : ""].filter(Boolean).join(" ");
+    const tool = event.tool ? `<span class="mono">${esc(event.tool)}</span>` : "";
+    const sidechain = event.sidechain ? `<span class="tag">Subagent</span>` : "";
+    return `<article class="${classes}"><div class="event-top"><span class="event-kind">${esc(EVENT_LABELS[event.kind] || event.kind)}</span>${tool}<span class="meta">${esc(when(event.ts))}</span>${sidechain}${tagList(flags)}</div>${eventDetail(event)}</article>`;
+  }).join("") || `<p class="empty">No events recorded.</p>`;
+  sessionDialog.showModal();
+}
+function openMessageSession(message) {
+  const row = V.sessions.find(session =>
+    session.agent === message.agent && session.id === message.session);
+  if (!row) return;
+  location.hash = "sessions";
+  showTab("sessions");
+  openSession(row);
 }
 
 const active = new Set();
@@ -468,11 +540,22 @@ function renderMessages() {
     (!p || m.project === p) && (!q || m.text.toLowerCase().includes(q)) &&
     [...active].every(t => m.tags.includes(t)));
   $("msg-count").textContent = num(rows.length);
-  $("messages").innerHTML = rows.slice(0, limit).map(m => {
+  const shown = rows.slice(0, limit);
+  $("messages").innerHTML = shown.map(m => {
     const agent = agentInfo(m.agent);
     const thinking = m.reasoning_tokens ? `<span>${tok(m.reasoning_tokens)} thinking tokens</span>` : "";
-    return `<div class="msg" style="--agent-color:${agent.color}"><div class="meta">${agentBadge(m.agent)}<span>${esc(when(m.ts))}</span><span>${esc(m.project)}</span>${m.kind === "rejection" ? "<span>rejection reason</span>" : ""}<span>${tok(m.tokens_out)} tokens out · ${usd(m.cost)}</span>${thinking}${tagList(m.tags)}</div><pre>${esc(m.text)}</pre></div>`;
+    return `<div class="msg openable" tabindex="0" role="button" aria-label="Open session" style="--agent-color:${agent.color}"><div class="meta">${agentBadge(m.agent)}<span>${esc(when(m.ts))}</span><span>${esc(m.project)}</span>${m.kind === "rejection" ? "<span>rejection reason</span>" : ""}<span>${tok(m.tokens_out)} tokens out · ${usd(m.cost)}</span>${thinking}${tagList(m.tags)}</div><pre>${esc(m.text)}</pre></div>`;
   }).join("") || `<p class="empty">No messages match.</p>`;
+  $("messages").querySelectorAll(".msg").forEach((element, index) => {
+    const open = () => openMessageSession(shown[index]);
+    element.onclick = open;
+    element.onkeydown = event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open();
+      }
+    };
+  });
   $("more").hidden = rows.length <= limit;
   $("more").textContent = `Show more · ${num(rows.length - limit)} left`;
 }
