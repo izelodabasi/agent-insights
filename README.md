@@ -1,6 +1,7 @@
 # agent-insights
 
-`agent-insights` is a personal dashboard for understanding how you work with coding agents—not just how many tokens they use, but where they help, where they get stuck, and which sessions actually end in something useful.
+`agent-insights` is a personal dashboard for understanding coding-agent usage, including token
+consumption, effective sessions, and workflow challenges.
 
 It reads the chat logs already stored on your machine and turns them into one self-contained HTML report. You can explore activity and cost by project or model, see which tools were used, compare session performance, and review moments where you corrected, interrupted, approved, or disliked an answer.
 
@@ -37,6 +38,23 @@ To write the report somewhere else:
 uv run agent-insights scan --out path/to/report.html
 ```
 
+Filter activity by an inclusive local-date range:
+
+```sh
+uv run agent-insights scan --since 2026-09-01 --until 2026-09-30
+```
+
+`--since` and `--until` can be used independently. The report header displays the active range.
+
+Use a rolling range:
+
+```sh
+uv run agent-insights scan --days 30
+```
+
+The available presets are 7, 30, and 90 days. `--days` can be combined with `--until` to end
+the rolling window on a historical date.
+
 ## What the report shows
 
 - Sessions, prompts, active time, token usage, and estimated API cost
@@ -63,7 +81,7 @@ Other tags look at the wording of your message: `disliked`, `correction`, `style
 
 ## About the score
 
-The score is meant as a useful signal, not a verdict on you or the agent. It starts from the amount of friction in each turn: corrections, rejected calls, interruptions, repeated failures, and other tags carry different weights. Successful commits help the score, while unusually expensive API calls make a small adjustment in either direction.
+The score is meant as a useful signal, not a verdict on you or the agent. It starts from the challenges in each turn: corrections, rejected calls, interruptions, repeated failures, and other tags carry different weights. Successful commits help the score, while unusually expensive API calls make a small adjustment in either direction.
 
 The exact calculation lives in `src/agent_insights/stats.py`. Session scores are capped at 100, and project scores are weighted by the number of turns in each session.
 

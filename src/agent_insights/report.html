@@ -156,6 +156,7 @@ input[type=search] { flex: 1; min-width: 180px; }
       <h1>Agent Insights</h1>
       <span class="meta" id="sub"></span>
       <span class="agent-key" id="agent-key"></span>
+      <select id="date-range" aria-label="Date range"></select>
       <select id="agent" aria-label="Agent"></select>
     </div>
     <nav id="nav">
@@ -256,7 +257,17 @@ const fromHash = () => showTab(["overview", "projects", "models", "sessions", "m
 addEventListener("hashchange", fromHash);
 fromHash();
 
-$("sub").textContent = `generated ${DATA.generated.replace("T", " ")}`;
+const range = DATA.date_range || {};
+const rangeLabel = range.since || range.until
+  ? ` · ${range.since || "beginning"} to ${range.until || "present"}`
+  : " · all dates";
+const generatedLabel = `generated ${DATA.generated.replace("T", " ")}`;
+$("sub").textContent = generatedLabel + rangeLabel;
+const periodOptions = Object.keys(DATA.period_views || {});
+$("date-range").innerHTML = [
+  ["all", range.since || range.until ? "Selected dates" : "All dates"],
+  ...periodOptions.map(days => [days, `Last ${days} days`]),
+].map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
 $("agent").innerHTML = [["all", "All agents"], ...DATA.agents.map(a => [a, agentInfo(a).label])]
   .map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("");
 $("legend").innerHTML = FAMILIES.map(([name, c]) =>
@@ -264,8 +275,13 @@ $("legend").innerHTML = FAMILIES.map(([name, c]) =>
 
 let V, T;
 function renderAll() {
-  V = DATA.views[$("agent").value];
+  const selectedPeriod = $("date-range").value;
+  const period = selectedPeriod === "all" ? DATA.views : DATA.period_views[selectedPeriod];
+  V = period[$("agent").value];
   T = V.totals;
+  $("sub").textContent = selectedPeriod === "all"
+    ? generatedLabel + rangeLabel
+    : `${generatedLabel} · last ${selectedPeriod} days`;
   const selectedAgent = $("agent").value;
   $("agent-key").innerHTML = DATA.agents.map(a =>
     `<span class="agent-key-item${selectedAgent === "all" || selectedAgent === a ? " on" : ""}">${agentBadge(a)}</span>`
@@ -463,6 +479,7 @@ function renderMessages() {
 $("f-project").onchange = $("f-text").oninput = () => { limit = 100; renderMessages(); };
 $("more").onclick = () => { limit += 100; renderMessages(); };
 $("agent").onchange = renderAll;
+$("date-range").onchange = renderAll;
 renderAll();
 </script>
 </body>

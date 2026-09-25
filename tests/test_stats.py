@@ -1,10 +1,17 @@
 import math
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
 from agent_insights.models import Event, Kind, Session, Usage
-from agent_insights.stats import _cost_factor, commit_subject, performance, score_trend, summarize
+from agent_insights.stats import (
+    _cost_factor,
+    build,
+    commit_subject,
+    performance,
+    score_trend,
+    summarize,
+)
 
 TS = datetime(2026, 9, 1, tzinfo=UTC)
 
@@ -25,13 +32,13 @@ def _session(*turn_tags: set[str], commit: bool = False) -> Session:
     return Session(agent="claude-code", session_id="s", project="p", cwd="", events=events)
 
 
-def test_score_decays_with_friction_per_turn():
+def test_score_decays_with_challenges_per_turn():
     s = _session({"disliked"}, {"interrupted"}, set(), set())
     expected = round(100 * math.exp(-3 * (1.0 + 0.4) / 4))
     assert performance(s) == {"score": expected, "turns": 4, "bad_turns": 2}
 
 
-def test_failed_tool_calls_add_friction_without_a_cap():
+def test_failed_tool_calls_add_challenges_without_a_cap():
     s = _session(set())
     s.events += [
         Event(kind=Kind.TOOL_RESULT, timestamp=TS, tool_id=str(i), is_error=True) for i in range(12)
@@ -103,3 +110,19 @@ def test_all_agent_rows_keep_their_source_attribution():
     codex_row = next(row for row in result["sessions"] if row["agent"] == "codex")
     assert codex_row["reasoning_efforts"] == ["high"]
     assert {message["reasoning_tokens"] for message in result["messages"]} == {0, 4}
+
+
+def test_build_includes_complete_rolling_period_views():
+    recent = _session(set())
+    recent.session_id = "recent"
+    recent.events[0].timestamp = datetime(2026, 9, 25, tzinfo=UTC)
+    old = _session(set())
+    old.session_id = "old"
+    old.events[0].timestamp = datetime(2026, 8, 1, tzinfo=UTC)
+
+    result = build([recent, old], {}, ["claude-code"], until=date(2026, 9, 25))
+
+    assert result["views"]["all"]["totals"]["sessions"] == 2
+    assert result["period_views"]["7"]["all"]["totals"]["sessions"] == 1
+    assert result["period_views"]["30"]["claude-code"]["totals"]["sessions"] == 1
+    assert result["period_views"]["90"]["all"]["totals"]["sessions"] == 2

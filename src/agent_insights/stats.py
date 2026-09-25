@@ -2,10 +2,11 @@ import math
 import re
 from bisect import bisect_right
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from statistics import median
 
 from agent_insights.cost import Prices, cost
+from agent_insights.date_filter import filter_sessions
 from agent_insights.models import Event, Kind, Session
 from agent_insights.tagging.rules import EDIT_TOOLS, successful_commits, turns
 
@@ -21,16 +22,41 @@ TAG_WEIGHTS = {
 }
 
 
-def build(sessions: list[Session], prices: Prices, agents: list[str]) -> dict:
-    views = {"all": summarize(sessions, prices)}
-    for agent in agents:
-        views[agent] = summarize([s for s in sessions if s.agent == agent], prices)
+def build(
+    sessions: list[Session],
+    prices: Prices,
+    agents: list[str],
+    since: date | None = None,
+    until: date | None = None,
+) -> dict:
+    views = _views(sessions, prices, agents)
+    end = until or date.today()
+    period_views = {}
+    if since is None:
+        for days in (7, 30, 90):
+            start = end - timedelta(days=days - 1)
+            period_views[str(days)] = _views(
+                filter_sessions(sessions, start, end), prices, agents
+            )
 
     return {
         "generated": datetime.now().isoformat(timespec="minutes"),
         "agents": agents,
+        "date_range": {
+            "since": since.isoformat() if since else None,
+            "until": until.isoformat() if until else None,
+        },
         "views": views,
+        "period_views": period_views,
     }
+
+
+def _views(sessions: list[Session], prices: Prices, agents: list[str]) -> dict:
+    views = {"all": summarize(sessions, prices)}
+    for agent in agents:
+        views[agent] = summarize([s for s in sessions if s.agent == agent], prices)
+
+    return views
 
 
 def summarize(sessions: list[Session], prices: Prices) -> dict:
@@ -69,33 +95,33 @@ def active_seconds(session: Session) -> float:
 
 
 def performance(s: Session, cost_factor: float = 1.0) -> dict:
-    """100 x e^(-3 x friction per turn), times 1.1 when the session made at least one commit
+    """100 x e^(-3 x challenges per turn), times 1.1 when the session made at least one commit
     and times cost_factor, capped at 100.
 
-    A turn's friction is the sum of TAG_WEIGHTS over every tag on its prompt and on the
+    A turn's challenge value is the sum of TAG_WEIGHTS over every tag on its prompt and on the
     rejections and interrupts inside it, plus one failed_tool_call per failed tool call.
     Averaging exponentially keeps a majority of clean turns from hiding the bad ones.
     """
-    friction = _turn_friction(s)
-    if not friction:
+    challenges = _turn_challenges(s)
+    if not challenges:
         return {"score": None, "turns": 0, "bad_turns": 0}
 
-    score = 100 * math.exp(-3 * sum(friction) / len(friction)) * cost_factor
+    score = 100 * math.exp(-3 * sum(challenges) / len(challenges)) * cost_factor
     if successful_commits(s):
         score *= 1.1
     return {
         "score": min(100, round(score)),
-        "turns": len(friction),
-        "bad_turns": sum(1 for f in friction if f > 0),
+        "turns": len(challenges),
+        "bad_turns": sum(1 for value in challenges if value > 0),
     }
 
 
-def score_trend(friction: list[float], window: int = 5, points: int = 60) -> list[int]:
+def score_trend(challenges: list[float], window: int = 5, points: int = 60) -> list[int]:
     """Score over the last `window` turns at each turn, thinned to at most `points` values."""
     trend = [
         round(100 * math.exp(-3 * sum(chunk) / len(chunk)))
-        for i in range(len(friction))
-        if (chunk := friction[max(0, i - window + 1) : i + 1])
+        for i in range(len(challenges))
+        if (chunk := challenges[max(0, i - window + 1) : i + 1])
     ]
     step = max(1, math.ceil(len(trend) / points))
     return trend[::step]
@@ -111,14 +137,14 @@ def commit_subject(command: str) -> str:
     return "commit"
 
 
-def _turn_friction(s: Session) -> list[float]:
-    friction = []
+def _turn_challenges(s: Session) -> list[float]:
+    challenges = []
     for opener, window in turns(s):
         tags = [*opener.tags, *(t for e in window for t in e.tags)]
         tags += ["failed_tool_call" for e in window if e.kind == Kind.TOOL_RESULT and e.is_error]
-        friction.append(max(0.0, sum(TAG_WEIGHTS.get(t, 0) for t in tags)))
+        challenges.append(max(0.0, sum(TAG_WEIGHTS.get(t, 0) for t in tags)))
 
-    return friction
+    return challenges
 
 
 def _cost_factors(sessions: list[Session], spent: dict[str, float]) -> dict[str, float]:
@@ -338,7 +364,7 @@ def _session_row(s: Session, spent: float, perf: dict) -> dict:
         "commits": [commit_subject(e.tool_input.get("command", "")) for e in successful_commits(s)],
         "files_edited": len(_edited_files(s)),
         "tags": sorted(s.tags),
-        "trend": score_trend(_turn_friction(s)),
+        "trend": score_trend(_turn_challenges(s)),
         **perf,
     }
 
