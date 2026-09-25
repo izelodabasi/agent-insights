@@ -1,4 +1,3 @@
-import json
 import math
 import re
 from bisect import bisect_right
@@ -9,7 +8,8 @@ from statistics import median
 from agent_insights.cost import Prices, cost
 from agent_insights.date_filter import filter_sessions
 from agent_insights.models import Event, Kind, Session
-from agent_insights.tagging.rules import EDIT_TOOLS, TEST_COMMAND, successful_commits, turns
+from agent_insights.tagging.rules import EDIT_TOOLS, successful_commits, turns
+from agent_insights.timeline import build_event_index
 
 TAG_WEIGHTS = {
     "disliked": 1.0,
@@ -49,7 +49,7 @@ def build(
         },
         "views": views,
         "period_views": period_views,
-        "session_events": _session_events(sessions),
+        "session_events": build_event_index(sessions),
     }
 
 
@@ -369,66 +369,6 @@ def _session_row(s: Session, spent: float, perf: dict) -> dict:
         "trend": score_trend(_turn_challenges(s)),
         **perf,
     }
-
-
-def _session_events(sessions: list[Session]) -> dict[str, dict[str, list[dict]]]:
-    events: dict[str, dict[str, list[dict]]] = defaultdict(dict)
-    for session in sessions:
-        events[session.agent][session.session_id] = _event_timeline(session)
-    return dict(events)
-
-
-def _event_timeline(session: Session) -> list[dict]:
-    calls: dict[str, tuple[str, str]] = {}
-    failed: set[tuple[str, str]] = set()
-    commits = {id(event) for event in successful_commits(session)}
-    timeline = []
-
-    for event in session.events:
-        flags = set(event.tags)
-        tool = event.tool
-        detail = event.text
-
-        if event.kind == Kind.TOOL_USE:
-            detail = json.dumps(event.tool_input, ensure_ascii=False, indent=2, default=str)
-            signature = (event.tool, detail)
-            calls[event.tool_id] = signature
-            if signature in failed:
-                flags.add("retry")
-            if event.tool in EDIT_TOOLS:
-                flags.add("edit")
-            if event.tool == "Bash" and TEST_COMMAND.search(
-                str(event.tool_input.get("command", ""))
-            ):
-                flags.add("test")
-            if id(event) in commits:
-                flags.add("commit")
-        elif event.kind == Kind.TOOL_RESULT:
-            signature = calls.get(event.tool_id)
-            tool = signature[0] if signature else ""
-            if event.is_error:
-                flags.add("failed")
-                if signature:
-                    failed.add(signature)
-
-        clipped, truncated = _clip(detail)
-        timeline.append(
-            {
-                "kind": event.kind.value,
-                "ts": event.timestamp.astimezone().isoformat(timespec="seconds"),
-                "tool": tool,
-                "detail": clipped,
-                "truncated": truncated,
-                "sidechain": event.sidechain,
-                "flags": sorted(flags),
-            }
-        )
-
-    return timeline
-
-
-def _clip(value: str, limit: int = 4000) -> tuple[str, bool]:
-    return (value[:limit], len(value) > limit)
 
 
 def _edited_files(s: Session) -> set[str]:
