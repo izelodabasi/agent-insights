@@ -126,3 +126,44 @@ def test_build_includes_complete_rolling_period_views():
     assert result["period_views"]["7"]["all"]["totals"]["sessions"] == 1
     assert result["period_views"]["30"]["claude-code"]["totals"]["sessions"] == 1
     assert result["period_views"]["90"]["all"]["totals"]["sessions"] == 2
+
+
+def test_attention_prioritizes_turns_and_explains_each_signal():
+    session = Session(
+        agent="codex",
+        session_id="attention",
+        project="demo",
+        cwd="",
+        events=[
+            Event(kind=Kind.PROMPT, timestamp=TS, text="please fix it"),
+            Event(
+                kind=Kind.TOOL_USE,
+                timestamp=TS,
+                tool="Edit",
+                tool_id="1",
+                tool_input={"file_path": "src/demo.py"},
+            ),
+            Event(kind=Kind.TOOL_RESULT, timestamp=TS, tool_id="1", is_error=True),
+            Event(kind=Kind.TOOL_USE, timestamp=TS, tool="Bash", tool_id="2"),
+            Event(kind=Kind.TOOL_RESULT, timestamp=TS, tool_id="2", is_error=True),
+            Event(kind=Kind.TOOL_USE, timestamp=TS, tool="Bash", tool_id="3"),
+            Event(kind=Kind.TOOL_RESULT, timestamp=TS, tool_id="3", is_error=True),
+            Event(kind=Kind.INTERRUPT, timestamp=TS),
+            Event(kind=Kind.PROMPT, timestamp=TS, text="clean turn"),
+        ],
+    )
+
+    attention = summarize([session], {})["attention"]
+
+    assert attention["total_turns"] == 2
+    assert attention["flagged_turns"] == 1
+    assert attention["high_priority"] == 1
+    assert attention["tasks"][0]["attention_rate"] == 50.0
+    assert attention["tasks"][0]["signals"] == {
+        "interrupted": 1,
+        "failed_tool_calls": 3,
+    }
+    assert attention["tasks"][0]["name"] == "please fix it"
+    assert attention["tasks"][0]["files"] == ["src/demo.py"]
+    assert attention["files"][0]["path"] == "src/demo.py"
+    assert attention["files"][0]["flagged_turns"] == 1

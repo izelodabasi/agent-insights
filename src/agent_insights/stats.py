@@ -85,6 +85,7 @@ def summarize(sessions: list[Session], prices: Prices) -> dict:
             key=lambda r: r["start"],
             reverse=True,
         ),
+        "attention": _attention(sessions, prices),
         "messages": _messages(sessions, prices),
     }
 
@@ -337,6 +338,153 @@ def _messages(sessions: list[Session], prices: Prices) -> list[dict]:
                 }
             )
     return sorted(messages, key=lambda m: m["ts"], reverse=True)
+
+
+def _attention(sessions: list[Session], prices: Prices) -> dict:
+    """Local, explainable triage of turns that may deserve a closer look.
+
+    This deliberately uses only recorded events and existing tags. It does not send conversation
+    content to a model, and it keeps the ranking understandable by exposing every contributing
+    signal rather than returning another opaque score.
+    """
+    task_rows = []
+    file_rows: dict[tuple[str, str], dict] = {}
+    total_turns = 0
+    flagged_turns = 0
+    high_priority = 0
+    for session in sessions:
+        starts, spend = _turn_spend(session, prices)
+        session_turns = turns(session)
+        total_turns += len(session_turns)
+        task = {
+            "agent": session.agent,
+            "project": session.project,
+            "session": session.session_id,
+            "name": session.title or session.ai_title,
+            "turns": len(session_turns),
+            "flagged_turns": 0,
+            "high_priority": 0,
+            "signals": Counter(),
+            "files": set(),
+            "cost": 0.0,
+            "last": "",
+        }
+
+        for index, (opener, window) in enumerate(session_turns):
+            signals = _attention_signals(opener, window)
+            if not signals:
+                continue
+            priority = _attention_priority(signals)
+            level = "high" if priority >= 5 else "medium" if priority >= 3 else "low"
+            _, _, turn_cost = spend[index]
+            timestamp = opener.timestamp.astimezone().isoformat(timespec="minutes")
+            paths = {
+                str(event.tool_input["file_path"])
+                for event in window
+                if event.kind == Kind.TOOL_USE
+                and event.tool in EDIT_TOOLS
+                and event.tool_input.get("file_path")
+            }
+            flagged_turns += 1
+            high_priority += level == "high"
+            task["name"] = task["name"] or opener.text[:80]
+            task["flagged_turns"] += 1
+            task["high_priority"] += level == "high"
+            task["signals"].update(signals)
+            task["files"].update(paths)
+            task["cost"] += turn_cost
+            task["last"] = max(task["last"], timestamp)
+
+            for path in paths:
+                file = file_rows.setdefault(
+                    (session.project, path),
+                    {
+                        "path": path,
+                        "project": session.project,
+                        "agents": Counter(),
+                        "sessions": set(),
+                        "tasks": set(),
+                        "flagged_turns": 0,
+                        "high_priority": 0,
+                        "signals": Counter(),
+                        "cost": 0.0,
+                        "last": "",
+                    },
+                )
+                file["agents"][session.agent] += 1
+                file["sessions"].add((session.agent, session.session_id))
+                file["tasks"].add(task["name"])
+                file["flagged_turns"] += 1
+                file["high_priority"] += level == "high"
+                file["signals"].update(signals)
+                file["cost"] += turn_cost
+                file["last"] = max(file["last"], timestamp)
+
+        if task["flagged_turns"]:
+            task["signals"] = dict(task["signals"])
+            task["files"] = sorted(task["files"])
+            task["cost"] = round(task["cost"], 4)
+            task["attention_rate"] = round(100 * task["flagged_turns"] / task["turns"], 1)
+            task_rows.append(task)
+
+    for file in file_rows.values():
+        file["agents"] = dict(file["agents"])
+        file["sessions"] = len(file["sessions"])
+        file["tasks"] = len(file["tasks"])
+        file["signals"] = dict(file["signals"])
+        file["cost"] = round(file["cost"], 4)
+
+    return {
+        "total_turns": total_turns,
+        "flagged_turns": flagged_turns,
+        "high_priority": high_priority,
+        "tasks": sorted(
+            task_rows,
+            key=lambda row: (row["high_priority"], row["flagged_turns"], row["attention_rate"]),
+            reverse=True,
+        ),
+        "files": sorted(
+            file_rows.values(),
+            key=lambda row: (row["high_priority"], row["flagged_turns"], row["last"]),
+            reverse=True,
+        ),
+    }
+
+
+def _attention_signals(opener: Event, window: list[Event]) -> Counter:
+    signals = Counter()
+    tags = Counter([*opener.tags, *(tag for event in window for tag in event.tags)])
+    for tag in ("disliked", "correction"):
+        if tags[tag]:
+            signals[tag] = tags[tag]
+
+    signals["rejected"] = sum(event.kind == Kind.REJECTION for event in window)
+    signals["interrupted"] = sum(event.kind == Kind.INTERRUPT for event in window)
+    signals["failed_tool_calls"] = sum(
+        event.kind == Kind.TOOL_RESULT and event.is_error for event in window
+    )
+    edits = Counter(
+        str(event.tool_input.get("file_path"))
+        for event in window
+        if event.kind == Kind.TOOL_USE
+        and event.tool in EDIT_TOOLS
+        and event.tool_input.get("file_path")
+    )
+    if (most_edits := max(edits.values(), default=0)) >= 3:
+        signals["repeated_edits"] = most_edits
+    return +signals
+
+
+def _attention_priority(signals: Counter) -> int:
+    weights = {
+        "disliked": 5,
+        "correction": 4,
+        "rejected": 4,
+        "interrupted": 3,
+        "failed_tool_calls": 1,
+        "repeated_edits": 1,
+    }
+    return sum(weights[name] * count for name, count in signals.items())
 
 
 def _session_row(s: Session, spent: float, perf: dict) -> dict:

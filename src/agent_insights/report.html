@@ -91,6 +91,32 @@ tbody tr.openable { cursor: pointer; }
 tbody tr.openable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 td.n, th.n { text-align: right; }
 td.n { font: 13px var(--mono); }
+#attention-tasks th, #attention-tasks td,
+#attention-files th, #attention-files td { padding-inline: 20px; }
+#attention-tasks th + th, #attention-tasks td + td,
+#attention-files th + th, #attention-files td + td { border-left: 1px solid var(--border); }
+#attention-tasks th:first-child, #attention-tasks td:first-child { min-width: 280px; }
+#attention-tasks th:nth-child(2), #attention-tasks td:nth-child(2),
+#attention-files th:nth-child(2), #attention-files td:nth-child(2) { min-width: 240px; }
+#attention-tasks th:last-child, #attention-tasks td:last-child,
+#attention-files th:last-child, #attention-files td:last-child { min-width: 250px; }
+#attention-files th:first-child, #attention-files td:first-child { min-width: 300px; }
+.cell-stack { display: flex; flex-direction: column; gap: 5px; white-space: normal; }
+.cell-stack .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 9px; }
+@media (max-width: 1000px) {
+  #attention-tasks thead, #attention-files thead { display: none; }
+  #attention-tasks tbody, #attention-files tbody,
+  #attention-tasks tr, #attention-files tr { display: block; }
+  #attention-tasks tr, #attention-files tr { padding: 8px 0; border-top: 1px solid var(--border); }
+  #attention-tasks td, #attention-files td {
+    display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; min-width: 0 !important;
+    padding: 7px 14px; border: 0 !important; text-align: left; white-space: normal;
+  }
+  #attention-tasks td::before, #attention-files td::before {
+    content: attr(data-label); color: var(--muted); font-size: 10px; font-weight: 600;
+    letter-spacing: .06em; text-transform: uppercase;
+  }
+}
 .arrow { color: var(--accent); }
 .text, .commit, .tags { white-space: normal; }
 .text { display: block; min-width: 220px; max-width: 360px; }
@@ -180,9 +206,9 @@ dialog::backdrop { background: rgb(10 14 22 / .58); }
     </div>
     <nav id="nav">
       <button data-tab="overview">Overview</button>
-      <button data-tab="projects">Projects</button>
-      <button data-tab="models">Models &amp; tools</button>
-      <button data-tab="sessions">Sessions</button>      <button data-tab="messages">Messages</button>
+      <button data-tab="analysis">Analysis</button>
+      <button data-tab="usage">Usage</button>
+      <button data-tab="history">History</button>
     </nav>
   </div>
 </header>
@@ -203,20 +229,20 @@ dialog::backdrop { background: rgb(10 14 22 / .58); }
     </div>
   </section>
 
-  <section class="tab" id="tab-projects">
-    <div class="card"><h2>Projects</h2><div class="scroll"><table id="projects"></table></div></div>
+  <section class="tab" id="tab-analysis">
+    <div class="card kpis" id="attention-tiles"></div>
+    <div class="card"><h2>Tasks with problems <span class="count" id="attention-task-count"></span></h2><div class="scroll"><table id="attention-tasks"></table></div></div>
+    <div class="card"><h2>Files with problems <span class="count" id="attention-file-count"></span></h2><div class="scroll"><table id="attention-files"></table></div></div>
   </section>
 
-  <section class="tab" id="tab-models">
+  <section class="tab" id="tab-usage">
+    <div class="card"><h2>Projects</h2><div class="scroll"><table id="projects"></table></div></div>
     <div class="card"><h2>Models</h2><div class="scroll"><table id="models"></table></div></div>
     <div class="card"><h2>Tools</h2><div class="scroll"><table id="tools"></table></div></div>
   </section>
 
-  <section class="tab" id="tab-sessions">
+  <section class="tab" id="tab-history">
     <div class="card"><h2>Sessions <span class="count" id="session-count"></span></h2><div class="scroll"><table id="sessions"></table></div></div>
-  </section>
-
-  <section class="tab" id="tab-messages">
     <div class="card">
       <div class="body">
         <div class="filters">
@@ -258,6 +284,7 @@ const TAG_LABELS = {
   interrupted: "Interrupted", low_performance: "Struggled",
   approval: "Approved", committed: "Committed", question: "Question",
   new_task: "New task", testing: "Testing", debugging: "Debugging", style: "Preference",
+  failed_tool_calls: "Failed tools", repeated_edits: "Repeated edits",
   failed: "Failed", retry: "Retry", edit: "Edit", test: "Test", commit: "Commit",
 };
 const tagLabel = t => TAG_LABELS[t] || String(t).replaceAll("_", " ");
@@ -280,7 +307,7 @@ function showTab(name) {
   document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
 }
 $("nav").querySelectorAll("button").forEach(b => b.onclick = () => { location.hash = b.dataset.tab; });
-const fromHash = () => showTab(["overview", "projects", "models", "sessions", "messages"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "overview");
+const fromHash = () => showTab(["overview", "analysis", "usage", "history"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "overview");
 addEventListener("hashchange", fromHash);
 fromHash();
 
@@ -327,6 +354,7 @@ function renderAll() {
   ).join("");
   renderCharts();
   renderTables();
+  renderAnalysis();
   renderFilters();
   renderSessions();
   renderMessages();
@@ -413,7 +441,7 @@ function table(el, cols, rows, onCount, openRow) {
       const x = a[key], y = b[key];
       return (typeof x === "number" ? x - y : cellText(x).localeCompare(cellText(y))) * dir;
     });
-    body.innerHTML = shown.map((r, i) => `<tr${openRow ? ` class="openable" tabindex="0" role="button" data-row="${i}"` : ""}>${cols.map(c => `<td class="${c.n ? "n" : ""}">${c.f ? c.f(r[c.k], r) : esc(r[c.k])}</td>`).join("")}</tr>`).join("") ||
+    body.innerHTML = shown.map((r, i) => `<tr${openRow ? ` class="openable" tabindex="0" role="button" data-row="${i}"` : ""}>${cols.map(c => `<td data-label="${esc(c.h)}" class="${c.n ? "n" : ""}">${c.f ? c.f(r[c.k], r) : esc(r[c.k])}</td>`).join("")}</tr>`).join("") ||
       `<tr><td class="none" colspan="${cols.length}">No rows match.</td></tr>`;
     if (openRow) body.querySelectorAll("tr[data-row]").forEach(tr =>
       makeOpenable(tr, () => openRow(shown[Number(tr.dataset.row)])));
@@ -439,11 +467,11 @@ function renderTables() {
 
   table($("projects"), [
     {k: "name", h: "Project"}, {k: "agents", h: "Agents", f: agentBadges},
-    {k: "score", h: "Score", n: 1, f: scoreCell},
-    {k: "turns", h: "Turns", n: 1, f: num}, {k: "bad_turns", h: "Bad turns", n: 1, f: num},
+    {k: "cost", h: "Cost", n: 1, f: usd}, {k: "active_hours", h: "Active hours", n: 1},
     {k: "sessions", h: "Sessions", n: 1, f: num}, {k: "prompts", h: "Prompts", n: 1, f: num},
     {k: "tool_calls", h: "Tool calls", n: 1, f: num}, {k: "tool_errors", h: "Failed tool calls", n: 1, f: num},
-    {k: "active_hours", h: "Active hours", n: 1}, {k: "cost", h: "Cost", n: 1, f: usd},
+    {k: "score", h: "Score", n: 1, f: scoreCell},
+    {k: "turns", h: "Turns", n: 1, f: num}, {k: "bad_turns", h: "Bad turns", n: 1, f: num},
     {k: "median_prompt_len", h: "Median message length (chars)", n: 1, f: num},
     {k: "first", h: "First", f: v => `<span class="mono">${esc(v)}</span>`},
     {k: "last", h: "Last", f: v => `<span class="mono">${esc(v)}</span>`},
@@ -465,6 +493,35 @@ function renderTables() {
     {k: "calls", h: "Calls", n: 1, f: v => num(v || 0)},
     {k: "errors", h: "Failed", n: 1, f: v => num(v || 0)}, {k: "rejections", h: "Rejected by you", n: 1, f: v => num(v || 0)},
   ], V.tools);
+}
+
+function renderAnalysis() {
+  const attention = V.attention || {total_turns: 0, flagged_turns: 0, high_priority: 0, tasks: [], files: []};
+  const rate = attention.total_turns ? Math.round(100 * attention.flagged_turns / attention.total_turns) : 0;
+  $("attention-tiles").innerHTML = [
+    [num(attention.total_turns), "turns checked"],
+    [num(attention.flagged_turns), "turns to review"],
+    [num(attention.high_priority), "high priority"],
+    [`${rate}%`, "attention rate"],
+  ].map(([v, l]) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`).join("");
+
+  table($("attention-tasks"), [
+    {k: "name", h: "Task", f: (v, r) => `<div class="cell-stack"><span class="text">${esc(v || "Untitled task")}</span><div class="meta">${agentBadge(r.agent)}<span>${esc(r.project)}</span><span>${when(r.last)}</span></div></div>`},
+    {k: "flagged_turns", h: "Problems", f: (v, r) => `<div class="cell-stack"><span>${num(v)} problem turns · ${num(r.high_priority)} high priority</span><span class="meta">${r.attention_rate}% of task · ${usd(r.cost)}</span></div>`},
+    {k: "files", h: "Affected files", f: v => v.length ? `<div class="tags">${v.map(path => `<span class="tag mono">${esc(path)}</span>`).join("")}</div>` : `<span class="none">No file identified</span>`},
+    {k: "signals", h: "Reasons", f: tagCounts},
+  ], attention.tasks, n => $("attention-task-count").textContent = num(n), openAttentionSession);
+
+  table($("attention-files"), [
+    {k: "path", h: "File", f: (v, r) => `<div class="cell-stack"><span class="mono text">${esc(v)}</span><div class="meta"><span>${esc(r.project)}</span>${agentBadges(r.agents)}<span>${when(r.last)}</span></div></div>`},
+    {k: "flagged_turns", h: "Problems", f: (v, r) => `<div class="cell-stack"><span>${num(v)} problem turns · ${num(r.high_priority)} high priority</span><span class="meta">${num(r.tasks)} tasks · ${num(r.sessions)} sessions · ${usd(r.cost)}</span></div>`},
+    {k: "signals", h: "Reasons", f: tagCounts},
+  ], attention.files, n => $("attention-file-count").textContent = num(n));
+}
+
+function openAttentionSession(task) {
+  const row = V.sessions.find(session => session.agent === task.agent && session.id === task.session);
+  if (row) openSession(row);
 }
 
 function renderSessions() {
@@ -512,8 +569,8 @@ function openMessageSession(message) {
   const row = V.sessions.find(session =>
     session.agent === message.agent && session.id === message.session);
   if (!row) return;
-  location.hash = "sessions";
-  showTab("sessions");
+  location.hash = "history";
+  showTab("history");
   openSession(row);
 }
 
